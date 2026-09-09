@@ -107,6 +107,16 @@ export default function Home() {
           }))
           setRecords(mapped)
           saveRecordsToStorage(mapped)
+          const sumEarn = mapped.reduce((s, r) => s + r.earned, 0)
+          const sumDur = mapped.reduce((s, r) => s + r.duration, 0)
+          salaryApi.reportToday({
+            date: getTodayStr(),
+            base_salary: 0,
+            slack_salary: sumEarn,
+            total_salary: sumEarn,
+            slack_count: mapped.length,
+            slack_duration: Math.round(sumDur),
+          }).catch(() => {})
         }
       } catch (e) {
         console.error('Failed to init user or cloud data', e)
@@ -222,9 +232,10 @@ export default function Home() {
       const baseEarn = workedSeconds * rates.perSecond
       salaryApi
         .reportToday({
-          base_salary: baseEarn,
-          slack_salary: currentSlackEarned,
-          total_salary: baseEarn + currentSlackEarned,
+          date: getTodayStr(),
+          base_salary: Number(baseEarn.toFixed(2)),
+          slack_salary: Number(currentSlackEarned.toFixed(2)),
+          total_salary: Number((baseEarn + currentSlackEarned).toFixed(2)),
           slack_count: currentRecords.length,
           slack_duration: Math.round(currentSlackDuration),
         })

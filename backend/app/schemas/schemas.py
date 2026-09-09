@@ -1,4 +1,4 @@
-﻿from typing import Optional
+from typing import Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
 
@@ -62,12 +62,12 @@ class RecordOut(RecordCreate):
         from_attributes = True
 
 class SalaryReportRequest(BaseModel):
-    date: str
-    base_salary: float
-    slack_salary: float
-    total_salary: float
-    slack_count: int
-    slack_duration: int
+    date: Optional[str] = None
+    base_salary: float = 0.0
+    slack_salary: float = 0.0
+    total_salary: float = 0.0
+    slack_count: int = 0
+    slack_duration: int = 0
 
 class DailySalaryOut(BaseModel):
     id: int

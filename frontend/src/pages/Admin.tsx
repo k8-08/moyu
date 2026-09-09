@@ -247,6 +247,73 @@ export default function Admin() {
               </div>
             </div>
 
+            {/* 中间插入：打工人多维数据详细表格 */}
+            <div
+              className="card"
+              style={{
+                background: '#fff',
+                border: '3px solid var(--black)',
+                boxShadow: '4px 4px 0 var(--black)',
+                padding: 20,
+                marginBottom: 20,
+                overflowX: 'auto',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+                <h3 style={{ margin: 0, fontSize: 18, fontWeight: 900 }}>
+                  👥 员工明细数据看板（{dimNames[dimension]}）
+                </h3>
+                <span style={{ fontSize: 12, fontWeight: 800, color: '#666' }}>
+                  按所选时间范围实时汇总每位员工的出勤与摸鱼数据
+                </span>
+              </div>
+
+              {statsData.user_details && statsData.user_details.length > 0 ? (
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: 13, fontWeight: 700 }}>
+                  <thead>
+                    <tr style={{ background: 'var(--yellow)', borderBottom: '3px solid var(--black)' }}>
+                      <th style={{ padding: '10px 8px' }}>打工人</th>
+                      <th style={{ padding: '10px 8px' }}>月薪档案</th>
+                      <th style={{ padding: '10px 8px' }}>工作时段</th>
+                      <th style={{ padding: '10px 8px' }}>出勤基本工资</th>
+                      <th style={{ padding: '10px 8px' }}>摸鱼白嫖收益</th>
+                      <th style={{ padding: '10px 8px' }}>摸鱼时长</th>
+                      <th style={{ padding: '10px 8px' }}>摸鱼频次</th>
+                      <th style={{ padding: '10px 8px' }}>已赚实发总额</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {statsData.user_details.map((u: any) => (
+                      <tr key={u.user_id} style={{ borderBottom: '1px solid #eee' }}>
+                        <td style={{ padding: '10px 8px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span>👤</span>
+                            <div>
+                              <div style={{ fontWeight: 900 }}>{u.nickname || u.username}</div>
+                              <div style={{ fontSize: 11, color: '#666' }}>{u.username}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{ padding: '10px 8px', fontWeight: 800 }}>¥{formatMoney(u.salary)}</td>
+                        <td style={{ padding: '10px 8px', fontSize: 12 }}>{u.work_hours}</td>
+                        <td style={{ padding: '10px 8px', color: '#2b7fff' }}>¥{formatMoney(u.base_salary)}</td>
+                        <td style={{ padding: '10px 8px', color: '#00c853', fontWeight: 900 }}>
+                          ¥{formatMoney(u.slack_salary)}
+                        </td>
+                        <td style={{ padding: '10px 8px' }}>{formatDuration(u.slack_duration)}</td>
+                        <td style={{ padding: '10px 8px' }}>{u.slack_count} 次</td>
+                        <td style={{ padding: '10px 8px', fontWeight: 900, color: 'var(--black)', fontSize: 14 }}>
+                          ¥{formatMoney(u.total_salary)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div style={{ padding: 24, textAlign: 'center', color: '#888' }}>暂无员工详细数据</div>
+              )}
+            </div>
+
             {/* 下半部分：摸鱼榜单与分类 */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
               {/* 摸鱼战神英雄榜 */}
@@ -405,8 +472,9 @@ export default function Admin() {
                     <th style={{ padding: '10px 8px' }}>昵称</th>
                     <th style={{ padding: '10px 8px' }}>登录账号</th>
                     <th style={{ padding: '10px 8px' }}>角色</th>
-                    <th style={{ padding: '10px 8px' }}>月薪 (元)</th>
-                    <th style={{ padding: '10px 8px' }}>工作时长</th>
+                    <th style={{ padding: '10px 8px' }}>月薪档案 (元)</th>
+                    <th style={{ padding: '10px 8px' }}>工作时段</th>
+                    <th style={{ padding: '10px 8px' }}>累计摸鱼收益</th>
                     <th style={{ padding: '10px 8px' }}>免密设备 ID</th>
                   </tr>
                 </thead>
@@ -429,9 +497,14 @@ export default function Admin() {
                           {u.role === 'admin' ? '管理员' : '普通用户'}
                         </span>
                       </td>
-                      <td style={{ padding: '10px 8px', fontWeight: 900 }}>¥{formatMoney(u.profile?.salary || 0)}</td>
+                      <td style={{ padding: '10px 8px', fontWeight: 900 }}>
+                        ¥{formatMoney(u.salary || u.profile?.salary || 10000)}
+                      </td>
                       <td style={{ padding: '10px 8px' }}>
-                        {u.profile ? u.profile.work_start + ' ~ ' + u.profile.work_end : '08:30 ~ 17:30'}
+                        {u.work_hours || (u.profile ? u.profile.work_start + ' ~ ' + u.profile.work_end : '08:30 ~ 17:30')}
+                      </td>
+                      <td style={{ padding: '10px 8px', color: '#00c853', fontWeight: 800 }}>
+                        ¥{formatMoney(u.total_slack_earned || 0)} ({u.total_slack_count || 0}次)
                       </td>
                       <td style={{ padding: '10px 8px', fontSize: 11, color: '#666' }}>{u.device_id || '未绑定'}</td>
                     </tr>

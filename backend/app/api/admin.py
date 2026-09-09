@@ -23,16 +23,28 @@ def get_all_users(admin: User = Depends(get_current_admin), db: Session = Depend
         total_slack_dur = db.query(func.coalesce(func.sum(SlackRecord.duration), 0)).filter(SlackRecord.user_id == u.id).scalar()
         total_slack_count = db.query(func.count(SlackRecord.id)).filter(SlackRecord.user_id == u.id).scalar()
 
+        salary_val = float(p.salary) if p and p.salary else 10000.0
+        work_days_val = float(p.work_days) if p and p.work_days else 21.75
+        work_hours_val = f"{p.work_start} ~ {p.work_end}" if p else "08:30 ~ 17:30"
+
         result.append({
             "id": u.id,
             "username": u.username,
             "nickname": u.nickname,
             "role": u.role,
             "device_id": u.device_id,
-            "created_at": u.created_at.strftime("%Y-%m-%d %H:%M"),
-            "salary": p.salary if p else 10000.0,
-            "work_days": p.work_days if p else 21.75,
-            "work_hours": f"{p.work_start} ~ {p.work_end}" if p else "08:30 ~ 17:30",
+            "created_at": u.created_at.strftime("%Y-%m-%d %H:%M") if u.created_at else "",
+            "salary": salary_val,
+            "work_days": work_days_val,
+            "work_hours": work_hours_val,
+            "profile": {
+                "salary": salary_val,
+                "work_days": work_days_val,
+                "work_start": p.work_start if p else "08:30",
+                "work_end": p.work_end if p else "17:30",
+                "lunch_start": p.lunch_start if p else "12:00",
+                "lunch_end": p.lunch_end if p else "13:30",
+            },
             "total_slack_earned": round(float(total_slack_earn), 2),
             "total_slack_duration": int(total_slack_dur),
             "total_slack_count": int(total_slack_count),
@@ -51,43 +63,35 @@ def get_stats(
     current_month = now.month
     current_week = now.isocalendar()[1]
 
-    # 根据维度筛选 daily_salaries 表
-    query = db.query(DailySalary)
-    rec_query = db.query(SlackRecord)
+    # 根据维度筛选 daily_salaries 表与 slack_records 表
+    salary_q = db.query(DailySalary)
+    rec_q = db.query(SlackRecord)
 
     if dimension in ("today", "day"):
-        query = query.filter(DailySalary.date == today_str)
-        start_today = datetime.combine(now.date(), datetime.min.time())
-        rec_query = rec_query.filter(SlackRecord.created_at >= start_today)
+        salary_q = salary_q.filter(DailySalary.date == today_str)
+        start_t = datetime.combine(now.date(), datetime.min.time())
+        rec_q = rec_q.filter(SlackRecord.created_at >= start_t)
     elif dimension == "week":
-        query = query.filter(DailySalary.year == current_year, DailySalary.week == current_week)
-        start_week = now - timedelta(days=now.weekday())
-        start_week = datetime.combine(start_week.date(), datetime.min.time())
-        rec_query = rec_query.filter(SlackRecord.created_at >= start_week)
+        salary_q = salary_q.filter(DailySalary.year == current_year, DailySalary.week == current_week)
+        start_w = now - timedelta(days=now.weekday())
+        start_w = datetime.combine(start_w.date(), datetime.min.time())
+        rec_q = rec_q.filter(SlackRecord.created_at >= start_w)
     elif dimension == "month":
-        query = query.filter(DailySalary.year == current_year, DailySalary.month == current_month)
-        start_month = datetime(current_year, current_month, 1)
-        rec_query = rec_query.filter(SlackRecord.created_at >= start_month)
+        salary_q = salary_q.filter(DailySalary.year == current_year, DailySalary.month == current_month)
+        start_m = datetime(current_year, current_month, 1)
+        rec_q = rec_q.filter(SlackRecord.created_at >= start_m)
     elif dimension == "year":
-        query = query.filter(DailySalary.year == current_year)
-        start_year = datetime(current_year, 1, 1)
-        rec_query = rec_query.filter(SlackRecord.created_at >= start_year)
-    # dimension == "all" 时不限制
+        salary_q = salary_q.filter(DailySalary.year == current_year)
+        start_y = datetime(current_year, 1, 1)
+        rec_q = rec_q.filter(SlackRecord.created_at >= start_y)
 
-    # 1. 汇总数值
-    total_base = db.query(func.coalesce(func.sum(DailySalary.base_salary), 0.0)).filter(query.whereclause if query.whereclause is not None else True).scalar()
-    total_slack = db.query(func.coalesce(func.sum(DailySalary.slack_salary), 0.0)).filter(query.whereclause if query.whereclause is not None else True).scalar()
-    total_earned = total_base + total_slack
-    total_slack_count = db.query(func.coalesce(func.sum(DailySalary.slack_count), 0)).filter(query.whereclause if query.whereclause is not None else True).scalar()
-    total_slack_duration = db.query(func.coalesce(func.sum(DailySalary.slack_duration), 0)).filter(query.whereclause if query.whereclause is not None else True).scalar()
-
-    # 2. 摸鱼分类占比排行 (从 slack_records 表聚合)
+    # 1. 摸鱼分类排行 (从 slack_records 聚合)
     cat_stats = db.query(
         SlackRecord.category_id,
         func.count(SlackRecord.id).label("count"),
         func.sum(SlackRecord.duration).label("duration"),
         func.sum(SlackRecord.earned).label("earned")
-    ).filter(rec_query.whereclause if rec_query.whereclause is not None else True)\
+    ).filter(rec_q.whereclause if rec_q.whereclause is not None else True)\
      .group_by(SlackRecord.category_id)\
      .order_by(desc("earned")).all()
 
@@ -101,62 +105,136 @@ def get_stats(
         for c in cat_stats
     ]
 
-    # 3. 摸鱼英雄榜 (按个人摸鱼白嫖收益排名)
-    user_slack_ranks = db.query(
-        User.id,
-        User.username,
-        User.nickname,
-        func.coalesce(func.sum(DailySalary.slack_salary), 0.0).label("slack_sum"),
-        func.coalesce(func.sum(DailySalary.slack_count), 0).label("count_sum"),
-        func.coalesce(func.sum(DailySalary.slack_duration), 0).label("duration_sum")
-    ).join(DailySalary, DailySalary.user_id == User.id)\
-     .filter(query.whereclause if query.whereclause is not None else True)\
-     .group_by(User.id, User.username, User.nickname)\
-     .order_by(desc("slack_sum")).limit(10).all()
+    # 2. 统计核心数值 (结合 DailySalary 与 SlackRecord，避免任何数据对应落空)
+    total_base = db.query(func.coalesce(func.sum(DailySalary.base_salary), 0.0))\
+                   .filter(salary_q.whereclause if salary_q.whereclause is not None else True).scalar()
+    total_slack_sal = db.query(func.coalesce(func.sum(DailySalary.slack_salary), 0.0))\
+                        .filter(salary_q.whereclause if salary_q.whereclause is not None else True).scalar()
+    total_slack_cnt = db.query(func.coalesce(func.sum(DailySalary.slack_count), 0))\
+                        .filter(salary_q.whereclause if salary_q.whereclause is not None else True).scalar()
+    total_slack_dur = db.query(func.coalesce(func.sum(DailySalary.slack_duration), 0))\
+                        .filter(salary_q.whereclause if salary_q.whereclause is not None else True).scalar()
 
-    leaderboard = [
-        {
-            "user_id": r[0],
-            "username": r[1],
-            "nickname": r[2],
-            "slack_salary": round(float(r[3]), 2),
-            "slack_count": int(r[4]),
-            "slack_duration": int(r[5])
-        }
-        for r in user_slack_ranks
-    ]
+    # 如果分类有摸鱼记录，但 daily_salaries 还没来得及上报生成，以真实的摸鱼流水为准
+    cat_sum_earned = sum(c["earned"] for c in category_ranks)
+    cat_sum_count = sum(c["count"] for c in category_ranks)
+    cat_sum_duration = sum(c["duration"] for c in category_ranks)
 
-    # 4. 近期工资流水记录列表
-    recent_salaries = query.order_by(DailySalary.date.desc(), DailySalary.id.desc()).limit(30).all()
-    salary_list = []
-    for s in recent_salaries:
-        salary_list.append({
+    final_slack_salary = max(float(total_slack_sal), cat_sum_earned)
+    final_slack_count = max(int(total_slack_cnt), cat_sum_count)
+    final_slack_duration = max(int(total_slack_dur), cat_sum_duration)
+
+    all_users = db.query(User).all()
+    user_count = len(all_users)
+
+    # 如果 base_salary 为 0 且当天有用户摸鱼或在册，按在册员工估算出勤工资基数
+    final_base_salary = float(total_base)
+    if final_base_salary == 0 and user_count > 0:
+        # 每位员工根据月薪计算当日出勤保底
+        for u in all_users:
+            p = u.profile
+            sal = p.salary if p and p.salary else 10000.0
+            days = p.work_days if p and p.work_days else 21.75
+            final_base_salary += (sal / days) * 0.5  # 半天出勤基底
+
+    final_total_salary = final_base_salary + final_slack_salary
+
+    # 3. 员工详细数据明细 (多维看板中间的员工详细数据表格)
+    user_details = []
+    for u in all_users:
+        p = u.profile
+        u_salary = p.salary if p and p.salary else 10000.0
+        u_days = p.work_days if p and p.work_days else 21.75
+        daily_rate = round(u_salary / u_days, 2)
+
+        # 查该员工在当前维度下的摸鱼收益
+        u_rec_q = db.query(
+            func.coalesce(func.sum(SlackRecord.earned), 0.0),
+            func.coalesce(func.sum(SlackRecord.duration), 0),
+            func.count(SlackRecord.id)
+        ).filter(SlackRecord.user_id == u.id)
+        if dimension in ("today", "day"):
+            start_t = datetime.combine(now.date(), datetime.min.time())
+            u_rec_q = u_rec_q.filter(SlackRecord.created_at >= start_t)
+        elif dimension == "week":
+            start_w = now - timedelta(days=now.weekday())
+            u_rec_q = u_rec_q.filter(SlackRecord.created_at >= datetime.combine(start_w.date(), datetime.min.time()))
+        elif dimension == "month":
+            u_rec_q = u_rec_q.filter(SlackRecord.created_at >= datetime(current_year, current_month, 1))
+        elif dimension == "year":
+            u_rec_q = u_rec_q.filter(SlackRecord.created_at >= datetime(current_year, 1, 1))
+
+        u_slack_earn, u_slack_dur, u_slack_cnt = u_rec_q.first()
+        u_slack_earn = round(float(u_slack_earn), 2)
+        u_slack_dur = int(u_slack_dur)
+        u_slack_cnt = int(u_slack_cnt)
+
+        # 出勤基本工资 (当前维度)
+        u_base = daily_rate if dimension in ("today", "day") else daily_rate * (5 if dimension == "week" else 21.75)
+        u_base = round(u_base, 2)
+        u_total = round(u_base + u_slack_earn, 2)
+
+        user_details.append({
+            "user_id": u.id,
+            "username": u.username,
+            "nickname": u.nickname,
+            "role": u.role,
+            "salary": u_salary,
+            "work_hours": f"{p.work_start} ~ {p.work_end}" if p else "08:30 ~ 17:30",
+            "base_salary": u_base,
+            "slack_salary": u_slack_earn,
+            "total_salary": u_total,
+            "slack_count": u_slack_cnt,
+            "slack_duration": u_slack_dur
+        })
+
+    # 4. 摸鱼战神英雄榜 (按个人摸鱼白嫖收益降序排序)
+    leaderboard = sorted(user_details, key=lambda x: x["slack_salary"], reverse=True)
+
+    return {
+        "dimension": dimension,
+        "summary": {
+            "total_base_salary": round(final_base_salary, 2),
+            "total_slack_salary": round(final_slack_salary, 2),
+            "total_earned": round(final_total_salary, 2),
+            "total_slack_count": final_slack_count,
+            "total_slack_duration": final_slack_duration
+        },
+        "category_ranks": category_ranks,
+        "leaderboard": leaderboard[:10],
+        "user_details": user_details
+    }
+
+@router.get("/salaries", summary="获取每日工资表快照流水")
+def get_all_salaries(
+    limit: int = Query(100, ge=1, le=500),
+    user_id: Optional[int] = None,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    query = db.query(DailySalary)
+    if user_id:
+        query = query.filter(DailySalary.user_id == user_id)
+
+    salaries = query.order_by(DailySalary.date.desc(), DailySalary.id.desc()).limit(limit).all()
+    result = []
+    for s in salaries:
+        u = s.user
+        result.append({
             "id": s.id,
             "user_id": s.user_id,
-            "username": s.user.username if s.user else "未知",
-            "nickname": s.user.nickname if s.user else "未知",
+            "user_nickname": u.nickname if u else f"打工人#{s.user_id}",
+            "user_username": u.username if u else "未知",
             "date": s.date,
             "year": s.year,
             "month": s.month,
             "week": s.week,
             "day": s.day,
-            "base_salary": round(s.base_salary, 2),
-            "slack_salary": round(s.slack_salary, 2),
-            "total_salary": round(s.total_salary, 2),
-            "slack_count": s.slack_count,
-            "slack_duration": s.slack_duration
+            "base_salary": round(float(s.base_salary), 2),
+            "slack_salary": round(float(s.slack_salary), 2),
+            "total_salary": round(float(s.total_salary), 2),
+            "slack_count": int(s.slack_count),
+            "slack_duration": int(s.slack_duration),
+            "updated_at": s.updated_at.strftime("%Y-%m-%d %H:%M") if s.updated_at else ""
         })
-
-    return {
-        "dimension": dimension,
-        "summary": {
-            "total_base_salary": round(float(total_base), 2),
-            "total_slack_salary": round(float(total_slack), 2),
-            "total_earned": round(float(total_earned), 2),
-            "total_slack_count": int(total_slack_count),
-            "total_slack_duration": int(total_slack_duration)
-        },
-        "category_ranks": category_ranks,
-        "leaderboard": leaderboard,
-        "salary_list": salary_list
-    }
+    return result

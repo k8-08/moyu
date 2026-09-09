@@ -338,34 +338,6 @@ export default function Login() {
               {loading ? '正在处理中…' : isRegister ? '🎉 立即注册并登入' : '🚀 立即登入工位'}
             </button>
           </form>
-
-          <div
-            style={{
-              marginTop: 20,
-              paddingTop: 16,
-              borderTop: '2px dashed #eee',
-              display: 'flex',
-              justifyContent: 'space-between',
-              fontSize: 13,
-              fontWeight: 800,
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => navigate('/')}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: '#666',
-                cursor: 'pointer',
-                textDecoration: 'underline',
-                font: 'inherit',
-              }}
-            >
-              ← 暂不登录，先游客体验
-            </button>
-            <span style={{ color: '#aaa' }}>管理员账号: admin</span>
-          </div>
         </div>
       </div>
     </div>

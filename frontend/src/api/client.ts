@@ -136,7 +136,7 @@ export const recordsApi = {
 
 // 工资表快照接口
 export const salaryApi = {
-  reportToday: (body: { base_salary: number; slack_salary: number; total_salary: number; slack_count: number; slack_duration: number }) =>
+  reportToday: (body: { date?: string; base_salary: number; slack_salary: number; total_salary: number; slack_count: number; slack_duration: number }) =>
     request<DailySalaryRecord>('/salary/report', {
       method: 'POST',
       body: JSON.stringify(body),
