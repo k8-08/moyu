@@ -15,6 +15,11 @@ if not hasattr(bcrypt, "__about__"):
         __version__ = getattr(bcrypt, "__version__", "4.0.0")
     bcrypt.__about__ = About()
 
+from PIL import Image, ImageDraw, ImageFont
+from app.core.config import settings
+
+CAPTCHA_CACHE: dict[str, tuple[str, float]] = {}
+
 # 密码处理使用原生 bcrypt，自动截断前 72 字节，彻底杜绝 passlib 兼容性报错
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     if not plain_password or not hashed_password:
