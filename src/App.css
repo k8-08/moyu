@@ -661,7 +661,8 @@ body {
   font-size: 14px;
   font-weight: 800;
   color: #555;
-  margin-bottom: 16px;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
 }
 .niuma-subinfo .tag {
   background: var(--cream);
@@ -673,11 +674,11 @@ body {
 /* 拉磨进度条 */
 .track-wrap {
   position: relative;
-  margin: 26px 8px 12px;
+  margin: 36px 8px 12px;
 }
 .track-mascot {
   position: absolute;
-  top: -38px;
+  top: -34px;
   transform: translateX(-50%);
   transition: left 0.3s ease-out;
   pointer-events: none;

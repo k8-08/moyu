@@ -442,7 +442,7 @@ export default function Home() {
 
         {/* 6. 今日摸鱼汇总看板与罪证流水明细 */}
         <section className="records-card">
-          <h2>📋 今日摸鱼罪证清单</h2>
+          <h2>📋 今日摸鱼清单</h2>
 
           {/* 汇总统计 */}
           <div className="summary-board">
