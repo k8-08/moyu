@@ -53,7 +53,7 @@ def get_all_users(admin: User = Depends(get_current_admin), db: Session = Depend
 
 @router.get("/stats", summary="获取多维统计数据看板(年/月/周/日)")
 def get_stats(
-    dimension: str = Query("day", regex="^(today|day|week|month|year|all)$"),
+    dimension: str = Query("day", pattern="^(today|day|week|month|year|all)$"),
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):

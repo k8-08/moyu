@@ -15,19 +15,21 @@ if not hasattr(bcrypt, "__about__"):
         __version__ = getattr(bcrypt, "__version__", "4.0.0")
     bcrypt.__about__ = About()
 
-from passlib.context import CryptContext
-from PIL import Image, ImageDraw, ImageFont
-from app.core.config import settings
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-CAPTCHA_CACHE: dict[str, tuple[str, float]] = {}
-
+# 密码处理使用原生 bcrypt，自动截断前 72 字节，彻底杜绝 passlib 兼容性报错
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    if not plain_password or not hashed_password:
+        return False
+    try:
+        pwd_bytes = plain_password.encode("utf-8")[:72]
+        hash_bytes = hashed_password.encode("utf-8")
+        return bcrypt.checkpw(pwd_bytes, hash_bytes)
+    except Exception:
+        return False
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    pwd_bytes = (password or "").encode("utf-8")[:72]
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(pwd_bytes, salt).decode("utf-8")
 
 def create_access_token(subject: Union[str, Any], expires_delta: Optional[timedelta] = None) -> str:
     if expires_delta:
