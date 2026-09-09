@@ -1,6 +1,10 @@
 // API 客户端与后端接口封装
 
-const API_BASE = 'http://localhost:8080/api'
+const API_BASE = import.meta.env.VITE_API_BASE || (
+  typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? 'http://localhost:8080/api'
+    : '/api'
+)
 
 // 获取或生成设备 ID (30天持久免密)
 export const getDeviceId = (): string => {
