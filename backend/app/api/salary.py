@@ -53,10 +53,14 @@ def report_daily_salary(data: SalaryReportRequest, current_user: User = Depends(
         )
         db.add(salary_record)
     else:
-        # 如果已有记录且原出勤工资大于本次传入的（防止被 0 覆盖）
-        if salary_record.base_salary and float(salary_record.base_salary) > effective_base:
+        # 如果明确传入了有效日薪，使用传入的日薪；若未传或为0，才回退到已有记录或标准日薪
+        if data.base_salary and float(data.base_salary) > 0:
+            effective_base = float(data.base_salary)
+        elif salary_record.base_salary and float(salary_record.base_salary) > 0:
             effective_base = float(salary_record.base_salary)
-            effective_total = round(effective_base + effective_slack, 2)
+        else:
+            effective_base = default_daily_base
+        effective_total = round(effective_base + effective_slack, 2)
 
         salary_record.base_salary = effective_base
         salary_record.slack_salary = effective_slack

@@ -63,10 +63,12 @@ export default function Home() {
     setSettings((prev) => {
       const next = { ...prev, [field]: val }
       saveSettingsToStorage(next)
-      // 若已登录，同步到云端打工档案
+      // 若已登录，同步到云端打工档案并联动刷新今日出勤底薪
       if (localStorage.getItem('moyu_token')) {
         const sal = parseFloat(next.salary) || 0
         const days = parseFloat(next.workDays) || 21.75
+        const newDailyBase = Number((sal / days).toFixed(2))
+
         profileApi.update({
           salary: sal,
           work_days: days,
@@ -74,11 +76,24 @@ export default function Home() {
           work_end: next.workEnd,
           lunch_start: next.lunchStart,
           lunch_end: next.lunchEnd,
+        }).then(() => {
+          // 联动上报今日工资快照
+          const sumEarn = records.reduce((s, r) => s + r.earned, 0)
+          const sumDur = records.reduce((s, r) => s + r.duration, 0)
+          salaryApi.reportToday({
+            date: getTodayStr(),
+            base_salary: newDailyBase,
+            slack_salary: Number(sumEarn.toFixed(2)),
+            total_salary: Number((newDailyBase + sumEarn).toFixed(2)),
+            slack_count: records.length,
+            slack_duration: Math.round(sumDur),
+          }).catch(() => {})
         }).catch((err) => console.error('Failed to sync profile', err))
       }
       return next
     })
   }
+
 
   /* ------------ 2. 核心状态：时钟与摸鱼记录 ------------ */
   const [records, setRecords] = useState<SlackRecord[]>(loadRecordsFromStorage)
@@ -311,11 +326,11 @@ export default function Home() {
   const syncDailySalaryReport = useCallback(
     (currentRecords: SlackRecord[], currentSlackEarned: number, currentSlackDuration: number) => {
       if (!localStorage.getItem('moyu_token')) return
-      const baseEarn = workedSeconds * rates.perSecond
+      const baseEarn = rates.perDay
       salaryApi
         .reportToday({
           date: getTodayStr(),
-          base_salary: Number(baseEarn.toFixed(2)),
+          base_salary: baseEarn,
           slack_salary: Number(currentSlackEarned.toFixed(2)),
           total_salary: Number((baseEarn + currentSlackEarned).toFixed(2)),
           slack_count: currentRecords.length,
@@ -323,7 +338,7 @@ export default function Home() {
         })
         .catch((err) => console.error('Failed to report daily salary', err))
     },
-    [workedSeconds, rates]
+    [rates.perDay]
   )
 
   // 补录快速摸鱼（严格限制在上班时间范围内）

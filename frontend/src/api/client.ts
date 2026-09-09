@@ -129,11 +129,22 @@ export const recordsApi = {
   getToday: () => request<any[]>('/records?date_str='),
   getByDate: (dateStr: string) => request<any[]>('/records?date_str=' + encodeURIComponent(dateStr)),
   listAll: () => request<any[]>('/records'),
-  create: (body: { id: string; category_id: string; start_time: number; end_time: number; duration: number; earned: number }) =>
-    request<any>('/records', {
+  create: (body: { id: string; category_id: string; start_time: number | string; end_time: number | string; duration: number; earned: number }) => {
+    const formatLocal = (val: number | string) => {
+      if (typeof val === 'string' && val.includes(':')) return val
+      const d = new Date(val)
+      const pad = (n: number) => String(n).padStart(2, '0')
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    }
+    return request<any>('/records', {
       method: 'POST',
-      body: JSON.stringify(body),
-    }),
+      body: JSON.stringify({
+        ...body,
+        start_time: formatLocal(body.start_time),
+        end_time: formatLocal(body.end_time),
+      }),
+    })
+  },
   delete: (id: string) =>
     request<any>('/records/' + encodeURIComponent(id), {
       method: 'DELETE',
