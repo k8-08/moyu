@@ -18,6 +18,8 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [captchaCode, setCaptchaCode] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
 
   // 验证码数据
   const [captchaId, setCaptchaId] = useState('')
@@ -238,24 +240,74 @@ export default function Login() {
             {/* 密码 */}
             <label className="field">
               <span>🔒 账号密码</span>
-              <input
-                type="password"
-                placeholder="请输入密码"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="请输入密码"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  style={{ width: '100%', paddingRight: 46 }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  style={{
+                    position: 'absolute',
+                    right: 6,
+                    background: '#f0f0f0',
+                    border: '2px solid var(--black)',
+                    borderRadius: 6,
+                    cursor: 'pointer',
+                    fontSize: 16,
+                    padding: '3px 7px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    userSelect: 'none',
+                    boxShadow: '1px 1px 0 var(--black)'
+                  }}
+                  title={showPassword ? '隐藏密码' : '显示密码'}
+                >
+                  {showPassword ? '👁️' : '🙈'}
+                </button>
+              </div>
             </label>
 
             {/* 确认密码 */}
             {isRegister && (
               <label className="field">
                 <span>🛡️ 确认密码</span>
-                <input
-                  type="password"
-                  placeholder="请再次输入密码"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                />
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                  <input
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    placeholder="请再次输入密码"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    style={{ width: '100%', paddingRight: 46 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    style={{
+                      position: 'absolute',
+                      right: 6,
+                      background: '#f0f0f0',
+                      border: '2px solid var(--black)',
+                      borderRadius: 6,
+                      cursor: 'pointer',
+                      fontSize: 16,
+                      padding: '3px 7px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      userSelect: 'none',
+                      boxShadow: '1px 1px 0 var(--black)'
+                    }}
+                    title={showConfirmPassword ? '隐藏密码' : '显示密码'}
+                  >
+                    {showConfirmPassword ? '👁️' : '🙈'}
+                  </button>
+                </div>
               </label>
             )}
 

@@ -1,5 +1,6 @@
+from typing import List, Optional
 from datetime import datetime
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.user import User
@@ -19,6 +20,17 @@ def report_daily_salary(data: SalaryReportRequest, current_user: User = Depends(
     day = dt.day
     week = dt.isocalendar()[1]
 
+    # 计算该用户的日薪出勤基准保底
+    profile = current_user.profile
+    u_salary = profile.salary if profile and profile.salary else 10000.0
+    u_days = profile.work_days if profile and profile.work_days else 21.75
+    default_daily_base = round(u_salary / u_days, 2)
+
+    # 确定有效出勤基本工资
+    effective_base = float(data.base_salary) if data.base_salary and float(data.base_salary) > 0 else default_daily_base
+    effective_slack = float(data.slack_salary or 0.0)
+    effective_total = round(effective_base + effective_slack, 2)
+
     # upsert 当天记录
     salary_record = db.query(DailySalary).filter(
         DailySalary.user_id == current_user.id,
@@ -33,17 +45,22 @@ def report_daily_salary(data: SalaryReportRequest, current_user: User = Depends(
             month=month,
             week=week,
             day=day,
-            base_salary=data.base_salary,
-            slack_salary=data.slack_salary,
-            total_salary=data.total_salary,
+            base_salary=effective_base,
+            slack_salary=effective_slack,
+            total_salary=effective_total,
             slack_count=data.slack_count,
             slack_duration=data.slack_duration
         )
         db.add(salary_record)
     else:
-        salary_record.base_salary = data.base_salary
-        salary_record.slack_salary = data.slack_salary
-        salary_record.total_salary = data.total_salary
+        # 如果已有记录且原出勤工资大于本次传入的（防止被 0 覆盖）
+        if salary_record.base_salary and float(salary_record.base_salary) > effective_base:
+            effective_base = float(salary_record.base_salary)
+            effective_total = round(effective_base + effective_slack, 2)
+
+        salary_record.base_salary = effective_base
+        salary_record.slack_salary = effective_slack
+        salary_record.total_salary = effective_total
         salary_record.slack_count = data.slack_count
         salary_record.slack_duration = data.slack_duration
         salary_record.updated_at = datetime.utcnow()
@@ -51,3 +68,34 @@ def report_daily_salary(data: SalaryReportRequest, current_user: User = Depends(
     db.commit()
     db.refresh(salary_record)
     return salary_record
+
+@router.get("/my-history", response_model=List[DailySalaryOut], summary="获取当前用户的历史每日工资记录")
+def get_my_salary_history(
+    limit: int = Query(100, ge=1, le=365),
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    query = db.query(DailySalary).filter(DailySalary.user_id == current_user.id)
+    if year:
+        query = query.filter(DailySalary.year == year)
+    if month:
+        query = query.filter(DailySalary.month == month)
+
+    salaries = query.order_by(DailySalary.date.desc()).limit(limit).all()
+
+    # 兜底检查：如果历史记录里有 base_salary 为 0 的，自动修复为员工标准日薪
+    profile = current_user.profile
+    default_base = round((profile.salary if profile and profile.salary else 10000.0) / (profile.work_days if profile and profile.work_days else 21.75), 2)
+    has_change = False
+    for s in salaries:
+        if not s.base_salary or float(s.base_salary) <= 0:
+            s.base_salary = default_base
+            s.total_salary = round(default_base + float(s.slack_salary or 0.0), 2)
+            has_change = True
+    if has_change:
+        db.commit()
+
+    return salaries
+

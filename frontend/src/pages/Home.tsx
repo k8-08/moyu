@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import '../App.css'
 import TimePicker from '../components/TimePicker'
 import { authApi, profileApi, recordsApi, salaryApi, type UserInfo } from '../api/client'
@@ -34,7 +34,24 @@ import {
   saveSettingsToStorage,
 } from '../lib/moyuStorage'
 
+// 生成严格限制在上班时间 [startStr, endStr] 内的时间刻度列表（超出上班时间根本没有选项）
+function generateWorkTimeSlots(startStr: string, endStr: string, stepMinutes = 5): string[] {
+  const [sH, sM] = (startStr || '08:30').split(':').map(Number)
+  const [eH, eM] = (endStr || '17:30').split(':').map(Number)
+  const startMin = sH * 60 + sM
+  const endMin = eH * 60 + eM
+  const slots: string[] = []
+  for (let m = startMin; m <= endMin; m += stepMinutes) {
+    const hh = String(Math.floor(m / 60)).padStart(2, '0')
+    const mm = String(m % 60).padStart(2, '0')
+    slots.push(`${hh}:${mm}`)
+  }
+  return slots
+}
+
 export default function Home() {
+  const navigate = useNavigate()
+
   /* ------------ 0. 用户鉴权与云端状态 ------------ */
   const [user, setUser] = useState<UserInfo | null>(null)
 
@@ -69,6 +86,8 @@ export default function Home() {
   const [now, setNow] = useState<Date>(() => new Date())
   const [modalCategory, setModalCategory] = useState<SlackCategory | null>(null)
   const [customMin, setCustomMin] = useState<string>('')
+  const [periodStart, setPeriodStart] = useState<string>('')
+  const [periodEnd, setPeriodEnd] = useState<string>('')
 
   // 页面挂载时：获取当前登录用户与云端数据
   useEffect(() => {
@@ -79,9 +98,14 @@ export default function Home() {
         const me = await authApi.getMe()
         setUser(me)
 
+        let curSal = parseFloat(settings.salary) || 10000
+        let curDays = parseFloat(settings.workDays) || 21.75
+
         // 1. 获取打工档案
         const p = await profileApi.get()
         if (p && p.salary) {
+          curSal = p.salary
+          curDays = p.work_days || 21.75
           const cloudSettings: MoyuSettings = {
             salary: String(p.salary),
             workDays: String(p.work_days),
@@ -93,6 +117,8 @@ export default function Home() {
           setSettings(cloudSettings)
           saveSettingsToStorage(cloudSettings)
         }
+
+        const initialDailyBase = Number((curSal / curDays).toFixed(2))
 
         // 2. 获取今日摸鱼记录
         const cloudRecs = await recordsApi.getToday()
@@ -111,9 +137,9 @@ export default function Home() {
           const sumDur = mapped.reduce((s, r) => s + r.duration, 0)
           salaryApi.reportToday({
             date: getTodayStr(),
-            base_salary: 0,
+            base_salary: initialDailyBase,
             slack_salary: sumEarn,
-            total_salary: sumEarn,
+            total_salary: Number((initialDailyBase + sumEarn).toFixed(2)),
             slack_count: mapped.length,
             slack_duration: Math.round(sumDur),
           }).catch(() => {})
@@ -210,7 +236,58 @@ export default function Home() {
 
     setModalCategory(cat)
     setCustomMin('')
+
+    // 初始化时段：默认选取上班时间范围内的合法刻度
+    const slots = generateWorkTimeSlots(settings.workStart, settings.workEnd, 5)
+    if (slots.length >= 2) {
+      const nowH = now.getHours()
+      const nowM = now.getMinutes()
+      const nowTotal = nowH * 60 + nowM
+      const [sH, sM] = settings.workStart.split(':').map(Number)
+      const [eH, eM] = settings.workEnd.split(':').map(Number)
+      const startTotal = sH * 60 + sM
+      const endTotal = eH * 60 + eM
+
+      if (nowTotal >= startTotal + 15 && nowTotal <= endTotal) {
+        const currentSlotMin = Math.floor(nowTotal / 5) * 5
+        const endSlotM = Math.min(endTotal, currentSlotMin)
+        const startSlotM = Math.max(startTotal, endSlotM - 30)
+        const sStr = `${String(Math.floor(startSlotM / 60)).padStart(2, '0')}:${String(startSlotM % 60).padStart(2, '0')}`
+        const eStr = `${String(Math.floor(endSlotM / 60)).padStart(2, '0')}:${String(endSlotM % 60).padStart(2, '0')}`
+        setPeriodStart(sStr)
+        setPeriodEnd(eStr)
+      } else {
+        const defaultEndM = Math.min(endTotal, startTotal + 30)
+        const eStr = `${String(Math.floor(defaultEndM / 60)).padStart(2, '0')}:${String(defaultEndM % 60).padStart(2, '0')}`
+        setPeriodStart(settings.workStart)
+        setPeriodEnd(eStr)
+      }
+    }
   }
+
+  // 严格在上班时间 [workStart, workEnd] 内的刻度点（超出上班时间根本没有选项，无法被选中）
+  const workTimeSlots = useMemo(() => {
+    return generateWorkTimeSlots(settings.workStart, settings.workEnd, 5)
+  }, [settings.workStart, settings.workEnd])
+
+  const validStartSlots = useMemo(() => {
+    if (workTimeSlots.length <= 1) return workTimeSlots
+    return workTimeSlots.slice(0, -1)
+  }, [workTimeSlots])
+
+  const validEndSlots = useMemo(() => {
+    if (!periodStart) return workTimeSlots.slice(1)
+    return workTimeSlots.filter((t) => t > periodStart)
+  }, [workTimeSlots, periodStart])
+
+  // 计算选定时段的分钟数
+  const periodMinutes = useMemo(() => {
+    if (!periodStart || !periodEnd) return 0
+    if (periodStart >= periodEnd) return 0
+    const [sH, sM] = periodStart.split(':').map(Number)
+    const [eH, eM] = periodEnd.split(':').map(Number)
+    return Math.max(0, (eH * 60 + eM) - (sH * 60 + sM))
+  }, [periodStart, periodEnd])
 
   // 开始实时开摸
   const startLiveSlack = () => {
@@ -244,19 +321,117 @@ export default function Home() {
     [workedSeconds, rates]
   )
 
-  // 补录快速摸鱼
+  // 补录快速摸鱼（严格限制在上班时间范围内）
   const handleQuickRecord = async (minutes: number) => {
     if (!modalCategory || minutes <= 0) return
-    const durSec = minutes * 60
+
+    const [sH, sM] = settings.workStart.split(':').map(Number)
+    const [eH, eM] = settings.workEnd.split(':').map(Number)
+    const startWorkMin = sH * 60 + sM
+    const endWorkMin = eH * 60 + eM
+
+    const today = new Date()
+    const nowH = today.getHours()
+    const nowM = today.getMinutes()
+    const nowTotalMin = nowH * 60 + nowM
+
+    // 如果当前还没到上班时间
+    if (nowTotalMin < startWorkMin) {
+      alert(`当前时间（${String(nowH).padStart(2, '0')}:${String(nowM).padStart(2, '0')}）还没到上班时间（${settings.workStart}）哦！\n带薪摸鱼只能在上班期间进行，请在下方“工作时段补录”中选择上班后的时间段～`)
+      return
+    }
+
+    // 确定结束时间（上限不得超过下班时间 settings.workEnd）
+    const endMin = Math.min(nowTotalMin, endWorkMin)
+    // 确定开始时间（下限不得早于上班时间 settings.workStart）
+    const startMin = Math.max(startWorkMin, endMin - minutes)
+
+    const actualMinutes = endMin - startMin
+    if (actualMinutes <= 0) {
+      alert(`所选时间超出了上班时间范围（${settings.workStart} ~ ${settings.workEnd}），无法生成有效摸鱼记录！`)
+      return
+    }
+
+    const durSec = actualMinutes * 60
     const earn = durSec * rates.perSecond
-    const endTime = Date.now()
-    const startTime = endTime - durSec * 1000
+
+    const startObj = new Date(today.getFullYear(), today.getMonth(), today.getDate(), Math.floor(startMin / 60), startMin % 60, 0)
+    const endObj = new Date(today.getFullYear(), today.getMonth(), today.getDate(), Math.floor(endMin / 60), endMin % 60, 0)
 
     const newRec: SlackRecord = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       categoryId: modalCategory.id,
-      startTime,
-      endTime,
+      startTime: startObj.getTime(),
+      endTime: endObj.getTime(),
+      duration: durSec,
+      earned: earn,
+    }
+
+    const updated = [newRec, ...records]
+    setRecords(updated)
+    saveRecordsToStorage(updated)
+    setModalCategory(null)
+
+    // 若已登录，同步记录到云端并更新工资表
+    if (localStorage.getItem('moyu_token')) {
+      try {
+        await recordsApi.create({
+          id: newRec.id,
+          category_id: newRec.categoryId,
+          start_time: newRec.startTime,
+          end_time: newRec.endTime,
+          duration: newRec.duration,
+          earned: newRec.earned,
+        })
+        const sumEarn = updated.reduce((s, r) => s + r.earned, 0)
+        const sumDur = updated.reduce((s, r) => s + r.duration, 0)
+        syncDailySalaryReport(updated, sumEarn, sumDur)
+      } catch (e) {
+        console.error('Failed to sync record to cloud', e)
+      }
+    }
+  }
+
+  // 补录自定义时段摸鱼（严格限制在上班时间段 settings.workStart ~ settings.workEnd 之内）
+  const handlePeriodRecord = async () => {
+    if (!modalCategory) return
+    if (!periodStart || !periodEnd) {
+      alert('请完整选择摸鱼开始时间与结束时间！')
+      return
+    }
+
+    if (periodStart < settings.workStart || periodEnd > settings.workEnd) {
+      alert(`摸鱼时段只能在上班时间（${settings.workStart} ~ ${settings.workEnd}）内哦！非工作时间不计入带薪摸鱼～`)
+      return
+    }
+
+    if (periodStart >= periodEnd) {
+      alert('摸鱼开始时间必须早于结束时间！')
+      return
+    }
+
+    const [sH, sM] = periodStart.split(':').map(Number)
+    const [eH, eM] = periodEnd.split(':').map(Number)
+    const durationMinutes = (eH * 60 + eM) - (sH * 60 + sM)
+
+    if (durationMinutes <= 0) {
+      alert('摸鱼时长必须大于 0 分钟！')
+      return
+    }
+
+    const durSec = durationMinutes * 60
+    const earn = durSec * rates.perSecond
+
+    // 构造今天的起止时间戳
+    const today = new Date()
+    const startObj = new Date(today.getFullYear(), today.getMonth(), today.getDate(), sH, sM, 0)
+    const endObj = new Date(today.getFullYear(), today.getMonth(), today.getDate(), eH, eM, 0)
+
+    const newRec: SlackRecord = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      categoryId: modalCategory.id,
+      startTime: startObj.getTime(),
+      endTime: endObj.getTime(),
       duration: durSec,
       earned: earn,
     }
@@ -407,9 +582,27 @@ export default function Home() {
             <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
               <div className="auth-user-info">
                 <span>👤 {user.nickname || user.username}</span>
-                <span style={{ fontSize: 11, background: 'var(--yellow)', padding: '2px 8px', borderRadius: 8, border: '2px solid var(--black)' }}>
-                  {user.role === 'admin' ? '👑 超级管理员' : '💼 精神股东'}
-                </span>
+                <Link
+                  to="/user-center"
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 900,
+                    background: 'var(--yellow)',
+                    color: 'var(--black)',
+                    textDecoration: 'none',
+                    padding: '3px 10px',
+                    borderRadius: 8,
+                    border: '2px solid var(--black)',
+                    boxShadow: '2px 2px 0 var(--black)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    cursor: 'pointer',
+                  }}
+                  title="点击进入个人中心：查看日历打工收成与昨日摸鱼复盘战报"
+                >
+                  👤 个人中心
+                </Link>
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 {user.role === 'admin' && (
@@ -421,7 +614,7 @@ export default function Home() {
                   onClick={() => {
                     authApi.logout()
                     setUser(null)
-                    window.location.reload()
+                    navigate('/login')
                   }}
                   className="auth-btn logout-btn"
                 >
@@ -801,6 +994,112 @@ export default function Home() {
                 预计白嫖收益：+¥{fmtMoney(parseFloat(customMin) * 60 * rates.perSecond)}
               </div>
             )}
+
+            {/* 3. 自定义上班时段精确补录（严格限制在上班时间范围内，超出上班时间根本没有选项，无法选中） */}
+            <div
+              style={{
+                marginTop: 14,
+                padding: '12px 10px',
+                background: '#fffdf0',
+                border: '2px dashed var(--black)',
+                borderRadius: 10,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 13, fontWeight: 900 }}>🕒 工作时段精确补录</span>
+                <span style={{ fontSize: 11, fontWeight: 800, color: '#ff0055' }}>
+                  仅限上班时间: {settings.workStart} ~ {settings.workEnd}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, color: '#666' }}>开始时间（上班中）</span>
+                  <select
+                    value={periodStart}
+                    onChange={(e) => {
+                      const newStart = e.target.value
+                      setPeriodStart(newStart)
+                      if (periodEnd && periodEnd <= newStart) {
+                        const nextSlot = workTimeSlots.find((t) => t > newStart)
+                        if (nextSlot) setPeriodEnd(nextSlot)
+                      }
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '7px 6px',
+                      border: '2px solid var(--black)',
+                      borderRadius: 8,
+                      fontWeight: 800,
+                      fontSize: 13,
+                      background: '#fff',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {validStartSlots.map((slot) => (
+                      <option key={slot} value={slot}>
+                        {slot}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <span style={{ fontWeight: 900, fontSize: 13, marginTop: 14 }}>至</span>
+
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, color: '#666' }}>结束时间（上班中）</span>
+                  <select
+                    value={periodEnd}
+                    onChange={(e) => setPeriodEnd(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '7px 6px',
+                      border: '2px solid var(--black)',
+                      borderRadius: 8,
+                      fontWeight: 800,
+                      fontSize: 13,
+                      background: '#fff',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {validEndSlots.map((slot) => (
+                      <option key={slot} value={slot}>
+                        {slot}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handlePeriodRecord}
+                  style={{
+                    padding: '8px 12px',
+                    background: 'var(--yellow)',
+                    border: '2px solid var(--black)',
+                    borderRadius: 8,
+                    fontWeight: 900,
+                    fontSize: 13,
+                    cursor: 'pointer',
+                    boxShadow: '2px 2px 0 var(--black)',
+                    whiteSpace: 'nowrap',
+                    marginTop: 14,
+                  }}
+                >
+                  确定补录
+                </button>
+              </div>
+
+              {periodMinutes > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, fontWeight: 900, marginTop: 4 }}>
+                  <span style={{ color: '#444' }}>选定时长: {periodMinutes} 分钟</span>
+                  <span style={{ color: '#0b6b28' }}>预计白嫖: +¥{fmtMoney(periodMinutes * 60 * rates.perSecond)}</span>
+                </div>
+              )}
+            </div>
 
             <button className="modal-cancel-btn" onClick={() => setModalCategory(null)}>
               暂不开摸，撤回

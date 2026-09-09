@@ -183,20 +183,31 @@ def get_stats(
             "work_hours": f"{p.work_start} ~ {p.work_end}" if p else "08:30 ~ 17:30",
             "base_salary": u_base,
             "slack_salary": u_slack_earn,
+            "total_slack_salary": u_slack_earn,
             "total_salary": u_total,
             "slack_count": u_slack_cnt,
-            "slack_duration": u_slack_dur
+            "slack_duration": u_slack_dur,
+            "total_slack_duration": u_slack_dur,
+            "earned": u_slack_earn,
+            "duration": u_slack_dur
         })
 
     # 4. 摸鱼战神英雄榜 (按个人摸鱼白嫖收益降序排序)
     leaderboard = sorted(user_details, key=lambda x: x["slack_salary"], reverse=True)
 
+    # 顶栏出勤工资汇总与员工明细出勤工资保持完全一致
+    user_detail_base_sum = sum(u["base_salary"] for u in user_details)
+    user_detail_slack_sum = sum(u["slack_salary"] for u in user_details)
+    final_base_salary = round(user_detail_base_sum, 2)
+    final_slack_salary = round(max(final_slack_salary, user_detail_slack_sum), 2)
+    final_total_salary = round(final_base_salary + final_slack_salary, 2)
+
     return {
         "dimension": dimension,
         "summary": {
-            "total_base_salary": round(final_base_salary, 2),
-            "total_slack_salary": round(final_slack_salary, 2),
-            "total_earned": round(final_total_salary, 2),
+            "total_base_salary": final_base_salary,
+            "total_slack_salary": final_slack_salary,
+            "total_earned": final_total_salary,
             "total_slack_count": final_slack_count,
             "total_slack_duration": final_slack_duration
         },
@@ -217,6 +228,21 @@ def get_all_salaries(
         query = query.filter(DailySalary.user_id == user_id)
 
     salaries = query.order_by(DailySalary.date.desc(), DailySalary.id.desc()).limit(limit).all()
+
+    # 自动纠偏：若历史记录中 base_salary 为 0，根据员工档案日薪校准
+    has_fixed = False
+    for s in salaries:
+        if not s.base_salary or float(s.base_salary) <= 0:
+            u = s.user
+            if u and u.profile:
+                p_sal = u.profile.salary or 10000.0
+                p_days = u.profile.work_days or 21.75
+                s.base_salary = round(p_sal / p_days, 2)
+                s.total_salary = round(float(s.base_salary) + float(s.slack_salary or 0.0), 2)
+                has_fixed = True
+    if has_fixed:
+        db.commit()
+
     result = []
     for s in salaries:
         u = s.user

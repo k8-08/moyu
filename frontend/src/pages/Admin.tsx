@@ -342,8 +342,8 @@ export default function Admin() {
                           <span>{hero.nickname || hero.username}</span>
                         </div>
                         <div style={{ textAlign: 'right' }}>
-                          <div style={{ color: 'var(--black)', fontSize: 14 }}>¥{formatMoney(hero.total_slack_salary || hero.earned)}</div>
-                          <div style={{ fontSize: 11, color: '#555' }}>{formatDuration(hero.total_slack_duration || hero.duration)}</div>
+                          <div style={{ color: 'var(--black)', fontSize: 14 }}>¥{formatMoney(hero.slack_salary ?? hero.total_slack_salary ?? hero.earned)}</div>
+                          <div style={{ fontSize: 11, color: '#555' }}>{formatDuration(hero.slack_duration ?? hero.total_slack_duration ?? hero.duration)}</div>
                         </div>
                       </div>
                     ))}

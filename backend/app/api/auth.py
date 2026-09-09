@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import verify_password, get_password_hash, create_access_token, generate_captcha, verify_captcha
@@ -51,7 +51,10 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse, summary="打工人登录(支持记住设备)")
 def login(data: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == data.username.strip()).first()
+    account = data.username.strip()
+    user = db.query(User).filter(
+        (User.username == account) | (User.nickname == account)
+    ).first()
     if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=400, detail="账号或密码错误")
 

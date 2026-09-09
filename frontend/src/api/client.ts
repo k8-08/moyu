@@ -123,6 +123,8 @@ export const profileApi = {
 // 摸鱼流水接口
 export const recordsApi = {
   getToday: () => request<any[]>('/records?date_str='),
+  getByDate: (dateStr: string) => request<any[]>('/records?date_str=' + encodeURIComponent(dateStr)),
+  listAll: () => request<any[]>('/records'),
   create: (body: { id: string; category_id: string; start_time: number; end_time: number; duration: number; earned: number }) =>
     request<any>('/records', {
       method: 'POST',
@@ -141,6 +143,12 @@ export const salaryApi = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  getMyHistory: (params?: { limit?: number; year?: number; month?: number }) => {
+    let url = '/salary/my-history?limit=' + (params?.limit || 100)
+    if (params?.year) url += '&year=' + params.year
+    if (params?.month) url += '&month=' + params.month
+    return request<DailySalaryRecord[]>(url)
+  },
   getHistory: (rangeType: 'day' | 'week' | 'month' | 'year' | 'all' = 'all') =>
     request<DailySalaryRecord[]>('/salary/history?range_type=' + rangeType),
 }
