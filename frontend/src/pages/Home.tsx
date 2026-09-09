@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router'
 import '../App.css'
 import TimePicker from '../components/TimePicker'
+import { authApi, profileApi, recordsApi, salaryApi, type UserInfo } from '../api/client'
 import {
   type ActiveSlack,
   DELETE_CONFIRM_MESSAGES,
@@ -33,6 +35,9 @@ import {
 } from '../lib/moyuStorage'
 
 export default function Home() {
+  /* ------------ 0. 用户鉴权与云端状态 ------------ */
+  const [user, setUser] = useState<UserInfo | null>(null)
+
   /* ------------ 1. 打工参数设置 ------------ */
   const [settings, setSettings] = useState<MoyuSettings>(loadSettingsFromStorage)
   const [showSettings, setShowSettings] = useState<boolean>(() => !settings.salary)
@@ -41,6 +46,19 @@ export default function Home() {
     setSettings((prev) => {
       const next = { ...prev, [field]: val }
       saveSettingsToStorage(next)
+      // 若已登录，同步到云端打工档案
+      if (localStorage.getItem('moyu_token')) {
+        const sal = parseFloat(next.salary) || 0
+        const days = parseFloat(next.workDays) || 21.75
+        profileApi.update({
+          salary: sal,
+          work_days: days,
+          work_start: next.workStart,
+          work_end: next.workEnd,
+          lunch_start: next.lunchStart,
+          lunch_end: next.lunchEnd,
+        }).catch((err) => console.error('Failed to sync profile', err))
+      }
       return next
     })
   }
@@ -51,6 +69,51 @@ export default function Home() {
   const [now, setNow] = useState<Date>(() => new Date())
   const [modalCategory, setModalCategory] = useState<SlackCategory | null>(null)
   const [customMin, setCustomMin] = useState<string>('')
+
+  // 页面挂载时：获取当前登录用户与云端数据
+  useEffect(() => {
+    const initCloudData = async () => {
+      const token = localStorage.getItem('moyu_token')
+      if (!token) return
+      try {
+        const me = await authApi.getMe()
+        setUser(me)
+
+        // 1. 获取打工档案
+        const p = await profileApi.get()
+        if (p && p.salary) {
+          const cloudSettings: MoyuSettings = {
+            salary: String(p.salary),
+            workDays: String(p.work_days),
+            workStart: p.work_start,
+            workEnd: p.work_end,
+            lunchStart: p.lunch_start,
+            lunchEnd: p.lunch_end,
+          }
+          setSettings(cloudSettings)
+          saveSettingsToStorage(cloudSettings)
+        }
+
+        // 2. 获取今日摸鱼记录
+        const cloudRecs = await recordsApi.getToday()
+        if (cloudRecs && Array.isArray(cloudRecs)) {
+          const mapped: SlackRecord[] = cloudRecs.map((r) => ({
+            id: r.id,
+            categoryId: r.category_id as any,
+            startTime: r.start_time,
+            endTime: r.end_time,
+            duration: r.duration,
+            earned: r.earned,
+          }))
+          setRecords(mapped)
+          saveRecordsToStorage(mapped)
+        }
+      } catch (e) {
+        console.error('Failed to init user or cloud data', e)
+      }
+    }
+    initCloudData()
+  }, [])
 
   // 100ms 刷新一次时间，驱动秒薪和摸鱼跳动
   useEffect(() => {
@@ -152,8 +215,26 @@ export default function Home() {
     setModalCategory(null)
   }
 
+  // 辅助：向后端上报并汇总今日工资表
+  const syncDailySalaryReport = useCallback(
+    (currentRecords: SlackRecord[], currentSlackEarned: number, currentSlackDuration: number) => {
+      if (!localStorage.getItem('moyu_token')) return
+      const baseEarn = workedSeconds * rates.perSecond
+      salaryApi
+        .reportToday({
+          base_salary: baseEarn,
+          slack_salary: currentSlackEarned,
+          total_salary: baseEarn + currentSlackEarned,
+          slack_count: currentRecords.length,
+          slack_duration: Math.round(currentSlackDuration),
+        })
+        .catch((err) => console.error('Failed to report daily salary', err))
+    },
+    [workedSeconds, rates]
+  )
+
   // 补录快速摸鱼
-  const handleQuickRecord = (minutes: number) => {
+  const handleQuickRecord = async (minutes: number) => {
     if (!modalCategory || minutes <= 0) return
     const durSec = minutes * 60
     const earn = durSec * rates.perSecond
@@ -173,10 +254,29 @@ export default function Home() {
     setRecords(updated)
     saveRecordsToStorage(updated)
     setModalCategory(null)
+
+    // 若已登录，同步记录到云端并更新工资表
+    if (localStorage.getItem('moyu_token')) {
+      try {
+        await recordsApi.create({
+          id: newRec.id,
+          category_id: newRec.categoryId,
+          start_time: newRec.startTime,
+          end_time: newRec.endTime,
+          duration: newRec.duration,
+          earned: newRec.earned,
+        })
+        const sumEarn = updated.reduce((s, r) => s + r.earned, 0)
+        const sumDur = updated.reduce((s, r) => s + r.duration, 0)
+        syncDailySalaryReport(updated, sumEarn, sumDur)
+      } catch (e) {
+        console.error('Failed to sync record to cloud', e)
+      }
+    }
   }
 
   // 结束当前正在进行的摸鱼
-  const endActiveSlack = () => {
+  const endActiveSlack = async () => {
     if (!activeSlack) return
     const elapsed = Math.max(1, (Date.now() - activeSlack.startTime) / 1000)
     const earned = elapsed * rates.perSecond
@@ -194,10 +294,29 @@ export default function Home() {
     saveRecordsToStorage(updated)
     setActiveSlack(null)
     saveActiveSlackToStorage(null)
+
+    // 若已登录，同步记录到云端并更新工资表
+    if (localStorage.getItem('moyu_token')) {
+      try {
+        await recordsApi.create({
+          id: newRec.id,
+          category_id: newRec.categoryId,
+          start_time: newRec.startTime,
+          end_time: newRec.endTime,
+          duration: newRec.duration,
+          earned: newRec.earned,
+        })
+        const sumEarn = updated.reduce((s, r) => s + r.earned, 0)
+        const sumDur = updated.reduce((s, r) => s + r.duration, 0)
+        syncDailySalaryReport(updated, sumEarn, sumDur)
+      } catch (e) {
+        console.error('Failed to sync record to cloud', e)
+      }
+    }
   }
 
   // 销毁单条罪证
-  const handleDeleteRecord = (rec: SlackRecord) => {
+  const handleDeleteRecord = async (rec: SlackRecord) => {
     const confirmMsg =
       DELETE_CONFIRM_MESSAGES[rec.categoryId] ||
       `确定要销毁这条摸鱼记录吗？\n价值 ¥${fmtMoney(rec.earned)} 的白嫖收益将被抹去！`
@@ -206,7 +325,30 @@ export default function Home() {
     const updated = records.filter((r) => r.id !== rec.id)
     setRecords(updated)
     saveRecordsToStorage(updated)
+
+    // 若已登录，从云端删除并更新工资表
+    if (localStorage.getItem('moyu_token')) {
+      try {
+        await recordsApi.delete(rec.id)
+        const sumEarn = updated.reduce((s, r) => s + r.earned, 0)
+        const sumDur = updated.reduce((s, r) => s + r.duration, 0)
+        syncDailySalaryReport(updated, sumEarn, sumDur)
+      } catch (e) {
+        console.error('Failed to delete cloud record', e)
+      }
+    }
   }
+
+  // 每日工资自动心跳同步（每 60 秒上报一次实时已赚工资）
+  useEffect(() => {
+    if (!user) return
+    const timer = setInterval(() => {
+      const sumEarn = records.reduce((s, r) => s + r.earned, 0) + activeEarned
+      const sumDur = records.reduce((s, r) => s + r.duration, 0) + activeElapsed
+      syncDailySalaryReport(records, sumEarn, sumDur)
+    }, 60000)
+    return () => clearInterval(timer)
+  }, [user, records, activeEarned, activeElapsed, syncDailySalaryReport])
 
   /* ------------ 6. 摸鱼圣经与段位 ------------ */
   const [quote, setQuote] = useState(() => QUOTES[Math.floor(Math.random() * QUOTES.length)])
@@ -248,6 +390,46 @@ export default function Home() {
       </div>
 
       <main className="container">
+        {/* 顶部用户状态栏 */}
+        <div className="auth-bar" style={{ marginTop: 14, marginBottom: -6 }}>
+          {user ? (
+            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+              <div className="auth-user-info">
+                <span>👤 {user.nickname || user.username}</span>
+                <span style={{ fontSize: 11, background: 'var(--yellow)', padding: '2px 8px', borderRadius: 8, border: '2px solid var(--black)' }}>
+                  {user.role === 'admin' ? '👑 超级管理员' : '💼 精神股东'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {user.role === 'admin' && (
+                  <Link to="/admin" className="auth-btn admin-btn">
+                    📊 后台管理看板
+                  </Link>
+                )}
+                <button
+                  onClick={() => {
+                    authApi.logout()
+                    setUser(null)
+                    window.location.reload()
+                  }}
+                  className="auth-btn logout-btn"
+                >
+                  🚪 退出
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+              <span style={{ fontSize: 13, fontWeight: 800, color: '#444' }}>
+                💡 登录后可将打工档案与摸鱼收益永久同步至云端
+              </span>
+              <Link to="/login" className="auth-btn login-btn">
+                🔑 登录 / 注册
+              </Link>
+            </div>
+          )}
+        </div>
+
         {/* 英雄头 */}
         <header className="hero">
           <span className="fish f1">🐟</span>
