@@ -89,11 +89,14 @@ export default function Home() {
   const [periodStart, setPeriodStart] = useState<string>('')
   const [periodEnd, setPeriodEnd] = useState<string>('')
 
-  // 页面挂载时：获取当前登录用户与云端数据
+  // 页面挂载时：获取当前登录用户与云端数据，未登录直接进入登录界面
   useEffect(() => {
     const initCloudData = async () => {
       const token = localStorage.getItem('moyu_token')
-      if (!token) return
+      if (!token) {
+        navigate('/login', { replace: true })
+        return
+      }
       try {
         const me = await authApi.getMe()
         setUser(me)
@@ -146,6 +149,8 @@ export default function Home() {
         }
       } catch (e) {
         console.error('Failed to init user or cloud data', e)
+        localStorage.removeItem('moyu_token')
+        navigate('/login', { replace: true })
       }
     }
     initCloudData()
