@@ -1,8 +1,10 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.user import User
 from app.models.profile import UserProfile
+from app.models.salary import DailySalary
 from app.schemas.schemas import ProfileSchema
 from app.api.deps import get_current_user
 
@@ -17,9 +19,6 @@ def get_profile(current_user: User = Depends(get_current_user), db: Session = De
         db.commit()
         db.refresh(profile)
     return profile
-
-from datetime import datetime
-from app.models.salary import DailySalary
 
 @router.put("", response_model=ProfileSchema, summary="保存/更新打工档案")
 def update_profile(data: ProfileSchema, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):

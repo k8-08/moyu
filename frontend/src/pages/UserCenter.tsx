@@ -120,6 +120,15 @@ export default function UserCenter() {
     navigate('/login')
   }
 
+  // 辅助：获取记录对应的本地日期字符串 YYYY-MM-DD
+  const getRecordDateStr = (r: any): string => {
+    const timeVal = r.start_time ?? r.startTime ?? r.created_at
+    if (!timeVal) return ''
+    const d = typeof timeVal === 'number' ? new Date(timeVal) : new Date(String(timeVal).replace(' ', 'T'))
+    if (isNaN(d.getTime())) return ''
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+
   // 6. 查找指定日期的工资快照与摸鱼流水
   const getSalaryByDate = useCallback(
     (dateStr: string) => {
@@ -128,12 +137,7 @@ export default function UserCenter() {
       // 如果是今天，出勤底薪严格以当前档案标准日薪 rates.perDay 为准，避免旧快照锁住
       if (dateStr === todayStr) {
         const dailyBase = rates.perDay
-        const dayRecs = allRecords.filter((r) => {
-          const dStr = r.created_at
-            ? r.created_at.slice(0, 10)
-            : new Date(r.start_time || r.startTime).toISOString().slice(0, 10)
-          return dStr === dateStr
-        })
+        const dayRecs = allRecords.filter((r) => getRecordDateStr(r) === dateStr)
         const sumSlack = match ? Number(match.slack_salary) : dayRecs.reduce((s, r) => s + (r.earned || 0), 0)
         const sumDur = match ? match.slack_duration : dayRecs.reduce((s, r) => s + (r.duration || 0), 0)
         const count = match ? match.slack_count : dayRecs.length
@@ -151,12 +155,7 @@ export default function UserCenter() {
       if (match) return match
 
       // 如果后端快照暂未落库，基于摸鱼流水与档案计算
-      const dayRecs = allRecords.filter((r) => {
-        const dStr = r.created_at
-          ? r.created_at.slice(0, 10)
-          : new Date(r.start_time || r.startTime).toISOString().slice(0, 10)
-        return dStr === dateStr
-      })
+      const dayRecs = allRecords.filter((r) => getRecordDateStr(r) === dateStr)
       const sumSlack = dayRecs.reduce((s, r) => s + (r.earned || 0), 0)
       const sumDur = dayRecs.reduce((s, r) => s + (r.duration || 0), 0)
       const dailyBase = rates.perDay
@@ -175,12 +174,7 @@ export default function UserCenter() {
 
   const getRecordsByDate = useCallback(
     (dateStr: string) => {
-      return allRecords.filter((r) => {
-        const dStr = r.created_at
-          ? r.created_at.slice(0, 10)
-          : new Date(r.start_time || r.startTime).toISOString().slice(0, 10)
-        return dStr === dateStr
-      })
+      return allRecords.filter((r) => getRecordDateStr(r) === dateStr)
     },
     [allRecords]
   )
@@ -294,18 +288,11 @@ export default function UserCenter() {
           return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
         }
         const str = String(val).trim()
-        const m = str.match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/)
-        if (m) {
-          let h = parseInt(m[4], 10)
-          const min = m[5]
-          // 容错处理：如果是 0~6 点凌晨，判定为之前丢失时区的历史 UTC 脏数据，自动纠偏 +8 小时
-          if (h >= 0 && h <= 6) {
-            h = (h + 8) % 24
-          }
-          return `${String(h).padStart(2, '0')}:${min}`
+        const d = new Date(str.includes(' ') && !str.includes('T') ? str.replace(' ', 'T') : str)
+        if (!isNaN(d.getTime())) {
+          return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
         }
-        const d = new Date(val)
-        return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+        return '上班时段'
       }
       return `${parseDt(s)} ~ ${parseDt(e)}`
     } catch {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import '../App.css'
-import { adminApi, authApi, type DailySalaryRecord, type UserInfo } from '../api/client'
+import { adminApi, authApi, type DailySalaryRecord, type UserInfo, type AdminStatsData } from '../api/client'
 
 type TimeDimension = 'day' | 'week' | 'month' | 'year' | 'all'
 type TabType = 'stats' | 'salaries' | 'users'
@@ -14,7 +14,7 @@ export default function Admin() {
   const [dimension, setDimension] = useState<TimeDimension>('day')
 
   // 看板统计数据
-  const [statsData, setStatsData] = useState<any>(null)
+  const [statsData, setStatsData] = useState<AdminStatsData | null>(null)
   // 工资表流水
   const [salariesList, setSalariesList] = useState<DailySalaryRecord[]>([])
   // 用户列表

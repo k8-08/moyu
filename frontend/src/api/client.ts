@@ -124,12 +124,37 @@ export const profileApi = {
     }),
 }
 
+export interface AdminStatsSummary {
+  total_base_salary: number
+  total_slack_salary: number
+  total_earned: number
+  total_slack_count: number
+  total_slack_duration: number
+}
+
+export interface CategoryRankItem {
+  category_id: string
+  count: number
+  duration: number
+  earned: number
+}
+
+export interface AdminStatsData {
+  dimension: string
+  summary: AdminStatsSummary
+  category_ranks: CategoryRankItem[]
+  category_stats?: CategoryRankItem[]
+  leaderboard: any[]
+  hero_rankings?: any[]
+  user_details: any[]
+}
+
 // 摸鱼流水接口
 export const recordsApi = {
   getToday: () => request<any[]>('/records?date_str='),
   getByDate: (dateStr: string) => request<any[]>('/records?date_str=' + encodeURIComponent(dateStr)),
   listAll: () => request<any[]>('/records'),
-  create: (body: { id: string; category_id: string; start_time: number | string; end_time: number | string; duration: number; earned: number }) => {
+  create: (body: { id: string; category_id: string; start_time: number | string; end_time: number | string; duration?: number; earned?: number }) => {
     const formatLocal = (val: number | string) => {
       if (typeof val === 'string' && val.includes(':')) return val
       const d = new Date(val)
@@ -153,7 +178,7 @@ export const recordsApi = {
 
 // 工资表快照接口
 export const salaryApi = {
-  reportToday: (body: { date?: string; base_salary: number; slack_salary: number; total_salary: number; slack_count: number; slack_duration: number }) =>
+  reportToday: (body: { date?: string; base_salary?: number; slack_salary?: number; total_salary?: number; slack_count?: number; slack_duration?: number }) =>
     request<DailySalaryRecord>('/salary/report', {
       method: 'POST',
       body: JSON.stringify(body),
@@ -164,25 +189,12 @@ export const salaryApi = {
     if (params?.month) url += '&month=' + params.month
     return request<DailySalaryRecord[]>(url)
   },
-  getHistory: (rangeType: 'day' | 'week' | 'month' | 'year' | 'all' = 'all') =>
-    request<DailySalaryRecord[]>('/salary/history?range_type=' + rangeType),
 }
 
 // 后台管理接口
 export const adminApi = {
   getStats: (dimension: 'day' | 'week' | 'month' | 'year' | 'all' = 'all') =>
-    request<{
-      dimension: string
-      total_base_salary: number
-      total_slack_salary: number
-      total_salary: number
-      total_slack_count: number
-      total_slack_duration: number
-      users_count: number
-      salaries_count: number
-      category_stats: { category_id: string; count: number; total_duration: number; total_earned: number }[]
-      hero_rankings: { user_id: number; nickname: string; username: string; total_slack_salary: number; total_slack_duration: number }[]
-    }>('/admin/stats?dimension=' + dimension),
+    request<AdminStatsData>('/admin/stats?dimension=' + dimension),
 
   getUsers: () =>
     request<

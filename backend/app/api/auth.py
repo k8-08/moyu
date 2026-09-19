@@ -52,9 +52,7 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
 @router.post("/login", response_model=TokenResponse, summary="打工人登录(支持记住设备)")
 def login(data: LoginRequest, db: Session = Depends(get_db)):
     account = data.username.strip()
-    user = db.query(User).filter(
-        (User.username == account) | (User.nickname == account)
-    ).first()
+    user = db.query(User).filter(User.username == account).first()
     if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=400, detail="账号或密码错误")
 

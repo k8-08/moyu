@@ -32,10 +32,10 @@ export interface ActiveSlack {
 export const DEFAULT_SETTINGS: MoyuSettings = {
   salary: '10000',
   workDays: '21.75',
-  workStart: '09:00',
-  workEnd: '18:00',
+  workStart: '08:30',
+  workEnd: '17:30',
   lunchStart: '12:00',
-  lunchEnd: '13:00',
+  lunchEnd: '13:30',
 }
 
 export const SLACK_CATEGORIES: SlackCategory[] = [

@@ -387,15 +387,21 @@ export default function Home() {
       earned: earn,
     }
 
-    const updated = [newRec, ...records]
-    setRecords(updated)
-    saveRecordsToStorage(updated)
     setModalCategory(null)
+    await commitRecord(newRec)
+  }
 
-    // 若已登录，同步记录到云端并更新工资表
+  // 统一提交摸鱼记录并同步云端权威计算结果
+  const commitRecord = async (newRec: SlackRecord) => {
+    setRecords((prev) => {
+      const updated = [newRec, ...prev]
+      saveRecordsToStorage(updated)
+      return updated
+    })
+
     if (localStorage.getItem('moyu_token')) {
       try {
-        await recordsApi.create({
+        const res = await recordsApi.create({
           id: newRec.id,
           category_id: newRec.categoryId,
           start_time: newRec.startTime,
@@ -403,9 +409,13 @@ export default function Home() {
           duration: newRec.duration,
           earned: newRec.earned,
         })
-        const sumEarn = updated.reduce((s, r) => s + r.earned, 0)
-        const sumDur = updated.reduce((s, r) => s + r.duration, 0)
-        syncDailySalaryReport(updated, sumEarn, sumDur)
+        if (res && res.earned !== undefined) {
+          setRecords((prev) => {
+            const next = prev.map((r) => (r.id === newRec.id ? { ...r, earned: res.earned, duration: res.duration } : r))
+            saveRecordsToStorage(next)
+            return next
+          })
+        }
       } catch (e) {
         console.error('Failed to sync record to cloud', e)
       }
@@ -456,29 +466,8 @@ export default function Home() {
       earned: earn,
     }
 
-    const updated = [newRec, ...records]
-    setRecords(updated)
-    saveRecordsToStorage(updated)
     setModalCategory(null)
-
-    // 若已登录，同步记录到云端并更新工资表
-    if (localStorage.getItem('moyu_token')) {
-      try {
-        await recordsApi.create({
-          id: newRec.id,
-          category_id: newRec.categoryId,
-          start_time: newRec.startTime,
-          end_time: newRec.endTime,
-          duration: newRec.duration,
-          earned: newRec.earned,
-        })
-        const sumEarn = updated.reduce((s, r) => s + r.earned, 0)
-        const sumDur = updated.reduce((s, r) => s + r.duration, 0)
-        syncDailySalaryReport(updated, sumEarn, sumDur)
-      } catch (e) {
-        console.error('Failed to sync record to cloud', e)
-      }
-    }
+    await commitRecord(newRec)
   }
 
   // 结束当前正在进行的摸鱼
@@ -495,30 +484,9 @@ export default function Home() {
       earned,
     }
 
-    const updated = [newRec, ...records]
-    setRecords(updated)
-    saveRecordsToStorage(updated)
     setActiveSlack(null)
     saveActiveSlackToStorage(null)
-
-    // 若已登录，同步记录到云端并更新工资表
-    if (localStorage.getItem('moyu_token')) {
-      try {
-        await recordsApi.create({
-          id: newRec.id,
-          category_id: newRec.categoryId,
-          start_time: newRec.startTime,
-          end_time: newRec.endTime,
-          duration: newRec.duration,
-          earned: newRec.earned,
-        })
-        const sumEarn = updated.reduce((s, r) => s + r.earned, 0)
-        const sumDur = updated.reduce((s, r) => s + r.duration, 0)
-        syncDailySalaryReport(updated, sumEarn, sumDur)
-      } catch (e) {
-        console.error('Failed to sync record to cloud', e)
-      }
-    }
+    await commitRecord(newRec)
   }
 
   // 销毁单条罪证
