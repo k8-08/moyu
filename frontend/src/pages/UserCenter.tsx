@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import '../App.css'
+import TimePicker from '../components/TimePicker'
 import { authApi, profileApi, recordsApi, salaryApi, type UserInfo } from '../api/client'
+import { showToast } from '../components/ui/Toast'
 import {
   type MoyuSettings,
   SLACK_CATEGORIES,
@@ -9,7 +11,7 @@ import {
   fmtMoney,
   getRates,
 } from '../lib/moyuTypes'
-import { loadRecordsFromStorage, loadSettingsFromStorage } from '../lib/moyuStorage'
+import { loadRecordsFromStorage, loadSettingsFromStorage, saveSettingsToStorage } from '../lib/moyuStorage'
 
 type TimeDimension = 'day' | 'week' | 'month' | 'year' | 'all'
 
@@ -20,6 +22,16 @@ export default function UserCenter() {
   const [user, setUser] = useState<UserInfo | null>(null)
   const [settings, setSettings] = useState<MoyuSettings>(loadSettingsFromStorage)
   const [loading, setLoading] = useState(true)
+
+  // 快捷修改档案弹窗状态
+  const [isEditingProfile, setIsEditingProfile] = useState(false)
+  const [editSalary, setEditSalary] = useState(settings.salary)
+  const [editWorkDays, setEditWorkDays] = useState(settings.workDays)
+  const [editWorkStart, setEditWorkStart] = useState(settings.workStart)
+  const [editWorkEnd, setEditWorkEnd] = useState(settings.workEnd)
+  const [editLunchStart, setEditLunchStart] = useState(settings.lunchStart)
+  const [editLunchEnd, setEditLunchEnd] = useState(settings.lunchEnd)
+  const [savingProfile, setSavingProfile] = useState(false)
 
   // 2. 核心数据源
   const [salariesList, setSalariesList] = useState<any[]>([])
@@ -33,6 +45,7 @@ export default function UserCenter() {
     const d = new Date()
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   })
+
 
   // 日期辅助：获取今天与昨天日期字符串
   const todayStr = useMemo(() => {
@@ -117,59 +130,134 @@ export default function UserCenter() {
   // 5. 退出登录
   const handleLogout = () => {
     authApi.logout()
+    showToast.info('已安全退出登录')
     navigate('/login')
   }
+
+  // 6. 修改打工档案
+  const handleOpenEditModal = () => {
+    setEditSalary(settings.salary)
+    setEditWorkDays(settings.workDays)
+    setEditWorkStart(settings.workStart)
+    setEditWorkEnd(settings.workEnd)
+    setEditLunchStart(settings.lunchStart)
+    setEditLunchEnd(settings.lunchEnd)
+    setIsEditingProfile(true)
+  }
+
+  const handleSaveProfile = async () => {
+    const sal = parseFloat(editSalary)
+    const days = parseFloat(editWorkDays)
+    if (!sal || sal <= 0) {
+      showToast.warning('请输入有效的月薪金额～')
+      return
+    }
+    if (!days || days <= 0 || days > 31) {
+      showToast.warning('月工作天数应在 1 ~ 31 天之间～')
+      return
+    }
+    if (editWorkStart >= editWorkEnd) {
+      showToast.warning('上班时间必须早于下班时间！')
+      return
+    }
+
+    try {
+      setSavingProfile(true)
+      const newSettings: MoyuSettings = {
+        salary: String(sal),
+        workDays: String(days),
+        workStart: editWorkStart,
+        workEnd: editWorkEnd,
+        lunchStart: editLunchStart,
+        lunchEnd: editLunchEnd,
+      }
+      setSettings(newSettings)
+      saveSettingsToStorage(newSettings)
+
+      if (localStorage.getItem('moyu_token')) {
+        await profileApi.update({
+          salary: sal,
+          work_days: days,
+          work_start: editWorkStart,
+          work_end: editWorkEnd,
+          lunch_start: editLunchStart,
+          lunch_end: editLunchEnd,
+        })
+      }
+
+      setIsEditingProfile(false)
+      showToast.success('⚙️ 打工档案更新成功，历史出勤与日历已重新核算！')
+      loadUserData()
+    } catch (e: any) {
+      showToast.error(e.message || '更新打工档案失败，请稍后重试')
+    } finally {
+      setSavingProfile(false)
+    }
+  }
+
 
   // 辅助：获取记录对应的本地日期字符串 YYYY-MM-DD
   const getRecordDateStr = (r: any): string => {
     const timeVal = r.start_time ?? r.startTime ?? r.created_at
     if (!timeVal) return ''
+    if (typeof timeVal === 'string' && /^\d{4}-\d{2}-\d{2}/.test(timeVal)) {
+      return timeVal.slice(0, 10)
+    }
     const d = typeof timeVal === 'number' ? new Date(timeVal) : new Date(String(timeVal).replace(' ', 'T'))
     if (isNaN(d.getTime())) return ''
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   }
 
-  // 6. 查找指定日期的工资快照与摸鱼流水
+  // 6. 查找指定日期的工资快照与摸鱼流水（以实际流水明细为真理基准，彻底杜绝“有汇总无明细”BUG）
   const getSalaryByDate = useCallback(
     (dateStr: string) => {
       const match = salariesList.find((s) => s.date === dateStr)
+      const dayRecs = allRecords.filter((r) => getRecordDateStr(r) === dateStr)
+      const dailyBase = rates.perDay
 
-      // 如果是今天，出勤底薪严格以当前档案标准日薪 rates.perDay 为准，避免旧快照锁住
+      const actualCount = dayRecs.length
+      const actualSlackEarn = Number(dayRecs.reduce((s, r) => s + (Number(r.earned) || 0), 0).toFixed(2))
+      const actualSlackDur = dayRecs.reduce((s, r) => s + (Number(r.duration) || 0), 0)
+
+      // 今天：数据严格以当天的真实流水明细计算，杜绝旧快照污染
       if (dateStr === todayStr) {
-        const dailyBase = rates.perDay
-        const dayRecs = allRecords.filter((r) => getRecordDateStr(r) === dateStr)
-        const sumSlack = match ? Number(match.slack_salary) : dayRecs.reduce((s, r) => s + (r.earned || 0), 0)
-        const sumDur = match ? match.slack_duration : dayRecs.reduce((s, r) => s + (r.duration || 0), 0)
-        const count = match ? match.slack_count : dayRecs.length
-
         return {
           date: dateStr,
           base_salary: dailyBase,
-          slack_salary: sumSlack,
-          total_salary: Number((dailyBase + sumSlack).toFixed(2)),
-          slack_count: count,
-          slack_duration: sumDur,
+          slack_salary: actualSlackEarn,
+          total_salary: Number((dailyBase + actualSlackEarn).toFixed(2)),
+          slack_count: actualCount,
+          slack_duration: actualSlackDur,
         }
       }
 
-      if (match) return match
+      if (match) {
+        // 历史日期：若有流水明细则优先使用流水计算，无流水才回退到快照
+        const effCount = actualCount > 0 ? actualCount : (match.slack_count || 0)
+        const effDur = actualCount > 0 ? actualSlackDur : (match.slack_duration || 0)
+        const effSlackEarn = actualCount > 0 ? actualSlackEarn : Number(match.slack_salary || 0)
+        const effBase = Number(match.base_salary) || dailyBase
 
-      // 如果后端快照暂未落库，基于摸鱼流水与档案计算
-      const dayRecs = allRecords.filter((r) => getRecordDateStr(r) === dateStr)
-      const sumSlack = dayRecs.reduce((s, r) => s + (r.earned || 0), 0)
-      const sumDur = dayRecs.reduce((s, r) => s + (r.duration || 0), 0)
-      const dailyBase = rates.perDay
+        return {
+          ...match,
+          base_salary: effBase,
+          slack_salary: effSlackEarn,
+          total_salary: Number((effBase + effSlackEarn).toFixed(2)),
+          slack_count: effCount,
+          slack_duration: effDur,
+        }
+      }
 
       return {
         date: dateStr,
         base_salary: dailyBase,
-        slack_salary: sumSlack,
-        total_salary: dailyBase + sumSlack,
-        slack_count: dayRecs.length,
-        slack_duration: sumDur,
+        slack_salary: actualSlackEarn,
+        total_salary: Number((dailyBase + actualSlackEarn).toFixed(2)),
+        slack_count: actualCount,
+        slack_duration: actualSlackDur,
       }
     },
-    [salariesList, allRecords, rates, todayStr]
+    [salariesList, allRecords, rates.perDay, todayStr]
   )
 
   const getRecordsByDate = useCallback(
@@ -430,10 +518,32 @@ export default function UserCenter() {
               <div style={{ fontSize: 16, fontWeight: 800 }}>{settings.workStart} ~ {settings.workEnd}</div>
             </div>
           </div>
-          <div style={{ fontSize: 12, fontWeight: 800, color: '#777' }}>
-            每月按照 {settings.workDays} 个出勤工作日精确折算
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ fontSize: 12, fontWeight: 800, color: '#777' }}>
+              每月按照 {settings.workDays} 个出勤工作日精确折算
+            </span>
+            <button
+              type="button"
+              onClick={handleOpenEditModal}
+              style={{
+                background: 'var(--yellow)',
+                border: '2px solid var(--black)',
+                borderRadius: 8,
+                padding: '6px 14px',
+                fontWeight: 900,
+                fontSize: 13,
+                cursor: 'pointer',
+                boxShadow: '2px 2px 0 var(--black)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
+            >
+              ✏️ 修改打工档案
+            </button>
           </div>
         </div>
+
 
         {/* 3. 多维战报看板（切换年 / 月 / 周 / 日） */}
         <section style={{ marginBottom: 24 }}>
@@ -518,7 +628,7 @@ export default function UserCenter() {
             </p>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 18 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: 18 }}>
             {/* 昨天复盘卡片 */}
             <div
               className="card"
@@ -671,7 +781,29 @@ export default function UserCenter() {
                   <span style={{ fontSize: 12, fontWeight: 800, color: '#666' }}>（点击任意日期可查看当天所有摸鱼流水）</span>
                 </h3>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const d = new Date()
+                    setCalendarYear(d.getFullYear())
+                    setCalendarMonth(d.getMonth() + 1)
+                    setSelectedDate(todayStr)
+                    showToast.info('已回到今日日历视图')
+                  }}
+                  style={{
+                    padding: '4px 10px',
+                    border: '2px solid var(--black)',
+                    borderRadius: 6,
+                    background: selectedDate === todayStr ? 'var(--yellow)' : '#fff',
+                    fontWeight: 900,
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    boxShadow: '1px 1px 0 var(--black)',
+                  }}
+                >
+                  📅 回到今天
+                </button>
                 <button
                   type="button"
                   onClick={handlePrevMonth}
@@ -686,7 +818,7 @@ export default function UserCenter() {
                 >
                   ◀ 上月
                 </button>
-                <span style={{ fontSize: 16, fontWeight: 900 }}>
+                <span style={{ fontSize: 16, fontWeight: 900, minWidth: 90, textAlign: 'center' }}>
                   {calendarYear}年 {calendarMonth}月
                 </span>
                 <button
@@ -704,6 +836,7 @@ export default function UserCenter() {
                   下月 ▶
                 </button>
               </div>
+
             </div>
 
             {/* 日历周标题 */}
@@ -906,6 +1039,120 @@ export default function UserCenter() {
           </div>
         </section>
       </main>
+
+      {/* 7. 快捷修改打工档案弹窗 */}
+      {isEditingProfile && (
+        <div className="moyu-modal-backdrop" onClick={() => setIsEditingProfile(false)}>
+          <div className="moyu-modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520, textAlign: 'left' }}>
+            <div style={{ textAlign: 'center', marginBottom: 16 }}>
+              <span style={{ fontSize: 36 }}>⚙️</span>
+              <h2 style={{ fontSize: 22, fontWeight: 900, margin: '4px 0 0' }}>修改打工档案</h2>
+              <p style={{ fontSize: 12, fontWeight: 700, color: '#666', margin: '4px 0 0' }}>
+                调整月薪或上下班时间后，系统将自动重新折算日薪、秒薪及历史战报
+              </p>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+              <label className="field">
+                <span>💰 月薪（税前元）</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={editSalary}
+                  onChange={(e) => setEditSalary(e.target.value.replace(/[^\d.]/g, ''))}
+                  placeholder="10000"
+                />
+              </label>
+
+              <label className="field">
+                <span>📅 月计薪天数</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={editWorkDays}
+                  onChange={(e) => setEditWorkDays(e.target.value.replace(/[^\d.]/g, ''))}
+                  placeholder="21.75"
+                />
+              </label>
+
+              <div className="field">
+                <span style={{ display: 'block', fontSize: 13, fontWeight: 800, marginBottom: 6 }}>⏰ 上班时间</span>
+                <TimePicker
+                  value={editWorkStart}
+                  onChange={setEditWorkStart}
+                  presetType="start"
+                />
+              </div>
+
+              <div className="field">
+                <span style={{ display: 'block', fontSize: 13, fontWeight: 800, marginBottom: 6 }}>🏠 下班时间</span>
+                <TimePicker
+                  value={editWorkEnd}
+                  onChange={setEditWorkEnd}
+                  presetType="end"
+                />
+              </div>
+
+              <div className="field">
+                <span style={{ display: 'block', fontSize: 13, fontWeight: 800, marginBottom: 6 }}>🍱 午休开始</span>
+                <TimePicker
+                  value={editLunchStart}
+                  onChange={setEditLunchStart}
+                  presetType="lunch"
+                />
+              </div>
+
+              <div className="field">
+                <span style={{ display: 'block', fontSize: 13, fontWeight: 800, marginBottom: 6 }}>🍱 午休结束</span>
+                <TimePicker
+                  value={editLunchEnd}
+                  onChange={setEditLunchEnd}
+                  presetType="lunch"
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+              <button
+                type="button"
+                onClick={() => setIsEditingProfile(false)}
+                style={{
+                  flex: 1,
+                  padding: '10px 14px',
+                  borderRadius: 10,
+                  border: '3px solid var(--black)',
+                  background: '#f0f0f0',
+                  fontWeight: 900,
+                  fontSize: 14,
+                  cursor: 'pointer',
+                  boxShadow: '2px 2px 0 var(--black)',
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={savingProfile}
+                onClick={handleSaveProfile}
+                style={{
+                  flex: 1,
+                  padding: '10px 14px',
+                  borderRadius: 10,
+                  border: '3px solid var(--black)',
+                  background: 'var(--green)',
+                  fontWeight: 900,
+                  fontSize: 14,
+                  cursor: 'pointer',
+                  boxShadow: '2px 2px 0 var(--black)',
+                }}
+              >
+                {savingProfile ? '正在保存...' : '💾 保存档案并重新核算'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
+

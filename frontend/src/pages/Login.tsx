@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import '../App.css'
 import { authApi } from '../api/client'
+import { showToast } from '../components/ui/Toast'
 
 export default function Login() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const defaultMode = searchParams.get('mode') === 'register' ? 'register' : 'login'
+  const redirectUrl = searchParams.get('redirect')
 
   const [isRegister, setIsRegister] = useState(defaultMode === 'register')
   const [loading, setLoading] = useState(false)
@@ -51,10 +53,12 @@ export default function Login() {
 
     if (!username.trim()) {
       setErrorMsg('请输入登录账号')
+      showToast.warning('请输入登录账号')
       return
     }
     if (!password) {
       setErrorMsg('请输入密码')
+      showToast.warning('请输入密码')
       return
     }
 
@@ -63,16 +67,19 @@ export default function Login() {
       if (isRegister) {
         if (!nickname.trim()) {
           setErrorMsg('请输入用户名/昵称')
+          showToast.warning('请输入用户名/昵称')
           setLoading(false)
           return
         }
         if (password !== confirmPassword) {
           setErrorMsg('两次输入的密码不一致')
+          showToast.error('两次输入的密码不一致')
           setLoading(false)
           return
         }
         if (!captchaCode.trim()) {
           setErrorMsg('请输入图形验证码')
+          showToast.warning('请输入图形验证码')
           setLoading(false)
           return
         }
@@ -88,7 +95,8 @@ export default function Login() {
 
         localStorage.setItem('moyu_token', res.access_token)
         localStorage.setItem('moyu_user', JSON.stringify(res.user))
-        navigate('/')
+        showToast.success('✨ 欢迎加入摸鱼公社！账号注册成功，已自动登录！')
+        navigate(redirectUrl || '/')
       } else {
         const res = await authApi.login({
           username: username.trim(),
@@ -97,14 +105,20 @@ export default function Login() {
 
         localStorage.setItem('moyu_token', res.access_token)
         localStorage.setItem('moyu_user', JSON.stringify(res.user))
-        if (res.user?.role === 'admin') {
+        showToast.success(`🚀 欢迎回来，${res.user.nickname || res.user.username}！`)
+
+        if (redirectUrl) {
+          navigate(redirectUrl)
+        } else if (res.user?.role === 'admin') {
           navigate('/admin')
         } else {
           navigate('/')
         }
       }
     } catch (err: any) {
-      setErrorMsg(err.message || '操作失败，请重试')
+      const msg = err.message || '操作失败，请重试'
+      setErrorMsg(msg)
+      showToast.error(msg)
       if (isRegister) {
         fetchCaptcha()
         setCaptchaCode('')
@@ -113,6 +127,7 @@ export default function Login() {
       setLoading(false)
     }
   }
+
 
   return (
     <div className="moyu-page" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -133,8 +148,15 @@ export default function Login() {
             padding: '28px 24px',
             border: '3px solid var(--black)',
             boxShadow: '5px 5px 0 var(--black)',
+            position: 'relative',
           }}
         >
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: 14 }}>
+            <span style={{ fontSize: 12, fontWeight: 900, color: '#555', background: '#f5f5f5', padding: '4px 12px', borderRadius: 999, border: '2px solid var(--black)' }}>
+              🔒 打工人实名打卡系统 · 登录/注册后通行
+            </span>
+          </div>
+
           <div style={{ fontSize: 44, marginBottom: 6 }}>🐂</div>
           <h1 style={{ fontSize: 28, fontWeight: 900, margin: '0 0 4px' }}>
             {isRegister ? '加入摸鱼公社' : '打工人返岗登录'}
@@ -142,6 +164,7 @@ export default function Login() {
           <p style={{ fontSize: 13, fontWeight: 700, color: '#666', margin: '0 0 20px' }}>
             {isRegister ? '注册专属账号，云端存证白嫖每一分钱' : '输入账号密码，绑定设备免密畅通'}
           </p>
+
 
           {/* 选项卡切换 */}
           <div

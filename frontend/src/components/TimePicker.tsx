@@ -54,6 +54,14 @@ export default function TimePicker({
     setOpen(false)
   }
 
+  const handleSelectNow = () => {
+    const d = new Date()
+    const h = String(d.getHours()).padStart(2, '0')
+    const m = String(Math.floor(d.getMinutes() / 5) * 5).padStart(2, '0')
+    onChange(`${h}:${m}`)
+    setOpen(false)
+  }
+
   const presets = PRESETS[presetType] || PRESETS.general
 
   return (
@@ -74,6 +82,15 @@ export default function TimePicker({
           {/* 快捷推荐标签 */}
           <div className="tp-presets-bar">
             <span className="tp-preset-tip">快捷：</span>
+            <button
+              type="button"
+              className="tp-preset-chip"
+              style={{ background: '#ffe4e6', color: '#ff0055', fontWeight: 900 }}
+              onClick={handleSelectNow}
+              title="快速对齐当前时间刻度"
+            >
+              ⏱️ 当前
+            </button>
             {presets.map((p) => (
               <button
                 type="button"
@@ -85,6 +102,7 @@ export default function TimePicker({
               </button>
             ))}
           </div>
+
 
           {/* 时与分双列选择面板 */}
           <div className="tp-columns-wrap">

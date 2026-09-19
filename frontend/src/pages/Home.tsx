@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router'
 import '../App.css'
 import TimePicker from '../components/TimePicker'
 import { authApi, profileApi, recordsApi, salaryApi, type UserInfo } from '../api/client'
+import { showToast } from '../components/ui/Toast'
+import ConfirmModal from '../components/ui/ConfirmModal'
 import {
   type ActiveSlack,
   DELETE_CONFIRM_MESSAGES,
@@ -33,21 +35,6 @@ import {
   saveRecordsToStorage,
   saveSettingsToStorage,
 } from '../lib/moyuStorage'
-
-// 生成严格限制在上班时间 [startStr, endStr] 内的时间刻度列表（超出上班时间根本没有选项）
-function generateWorkTimeSlots(startStr: string, endStr: string, stepMinutes = 5): string[] {
-  const [sH, sM] = (startStr || '08:30').split(':').map(Number)
-  const [eH, eM] = (endStr || '17:30').split(':').map(Number)
-  const startMin = sH * 60 + sM
-  const endMin = eH * 60 + eM
-  const slots: string[] = []
-  for (let m = startMin; m <= endMin; m += stepMinutes) {
-    const hh = String(Math.floor(m / 60)).padStart(2, '0')
-    const mm = String(m % 60).padStart(2, '0')
-    slots.push(`${hh}:${mm}`)
-  }
-  return slots
-}
 
 export default function Home() {
   const navigate = useNavigate()
@@ -94,17 +81,28 @@ export default function Home() {
     })
   }
 
-
   /* ------------ 2. 核心状态：时钟与摸鱼记录 ------------ */
   const [records, setRecords] = useState<SlackRecord[]>(loadRecordsFromStorage)
   const [activeSlack, setActiveSlack] = useState<ActiveSlack | null>(loadActiveSlackFromStorage)
   const [now, setNow] = useState<Date>(() => new Date())
   const [modalCategory, setModalCategory] = useState<SlackCategory | null>(null)
-  const [customMin, setCustomMin] = useState<string>('')
-  const [periodStart, setPeriodStart] = useState<string>('')
-  const [periodEnd, setPeriodEnd] = useState<string>('')
+  const [modalTab, setModalTab] = useState<'live' | 'record'>('live')
+  const [customMin, setCustomMin] = useState<number | string>(15)
+  const [periodStart, setPeriodStart] = useState<string>('09:00')
+  const [periodEnd, setPeriodEnd] = useState<string>('09:30')
 
-  // 页面挂载时：获取当前登录用户与云端数据，未登录直接进入登录界面
+  // 确认操作弹窗状态
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean
+    title?: string
+    message: string
+    confirmText?: string
+    cancelText?: string
+    confirmVariant?: 'danger' | 'primary' | 'warning'
+    onConfirm: () => void
+  } | null>(null)
+
+  // 页面挂载时：必须登录才能用，未登录不给试用，直接重定向至登录页
   useEffect(() => {
     const initCloudData = async () => {
       const token = localStorage.getItem('moyu_token')
@@ -116,14 +114,9 @@ export default function Home() {
         const me = await authApi.getMe()
         setUser(me)
 
-        let curSal = parseFloat(settings.salary) || 10000
-        let curDays = parseFloat(settings.workDays) || 21.75
-
         // 1. 获取打工档案
         const p = await profileApi.get()
         if (p && p.salary) {
-          curSal = p.salary
-          curDays = p.work_days || 21.75
           const cloudSettings: MoyuSettings = {
             salary: String(p.salary),
             workDays: String(p.work_days),
@@ -136,40 +129,36 @@ export default function Home() {
           saveSettingsToStorage(cloudSettings)
         }
 
-        const initialDailyBase = Number((curSal / curDays).toFixed(2))
-
-        // 2. 获取今日摸鱼记录
-        const cloudRecs = await recordsApi.getToday()
+        // 2. 获取今日摸鱼记录（严格按今天拉取，历史数据不混入今天）
+        const todayStr = getTodayStr()
+        const cloudRecs = await recordsApi.getToday(todayStr)
         if (cloudRecs && Array.isArray(cloudRecs)) {
+          const parseTs = (val: any) => {
+            if (typeof val === 'number') return val
+            const d = new Date(String(val).replace(' ', 'T'))
+            return isNaN(d.getTime()) ? Date.now() : d.getTime()
+          }
           const mapped: SlackRecord[] = cloudRecs.map((r) => ({
             id: r.id,
             categoryId: r.category_id as any,
-            startTime: r.start_time,
-            endTime: r.end_time,
+            startTime: parseTs(r.start_time),
+            endTime: parseTs(r.end_time),
             duration: r.duration,
             earned: r.earned,
           }))
           setRecords(mapped)
           saveRecordsToStorage(mapped)
-          const sumEarn = mapped.reduce((s, r) => s + r.earned, 0)
-          const sumDur = mapped.reduce((s, r) => s + r.duration, 0)
-          salaryApi.reportToday({
-            date: getTodayStr(),
-            base_salary: initialDailyBase,
-            slack_salary: sumEarn,
-            total_salary: Number((initialDailyBase + sumEarn).toFixed(2)),
-            slack_count: mapped.length,
-            slack_duration: Math.round(sumDur),
-          }).catch(() => {})
         }
       } catch (e) {
-        console.error('Failed to init user or cloud data', e)
+        console.warn('Init user session failed, redirecting to login', e)
         localStorage.removeItem('moyu_token')
+        setUser(null)
         navigate('/login', { replace: true })
       }
     }
     initCloudData()
-  }, [])
+  }, [navigate])
+
 
   // 100ms 刷新一次时间，驱动秒薪和摸鱼跳动
   useEffect(() => {
@@ -236,69 +225,62 @@ export default function Home() {
   const handleClickCategory = (cat: SlackCategory) => {
     if (!parseFloat(settings.salary)) {
       setShowSettings(true)
-      alert('⚠️ 请先在设置里输入你的月薪，有了家底才好开始摸鱼变现～')
+      showToast.warning('⚠️ 请先在打工档案中输入你的月薪，有了家底才好开始摸鱼变现～')
       return
     }
 
     if (activeSlack) {
       if (activeSlack.categoryId === cat.id) {
-        alert(`你当前已经在「${cat.name}」中啦，正在持续白嫖中！`)
+        showToast.info(`你当前已经在「${cat.name}」中啦，正在持续白嫖中！`)
         return
       }
       const activeCat = SLACK_CATEGORIES.find((c) => c.id === activeSlack.categoryId)
-      const ok = window.confirm(
-        `你正在进行「${activeCat?.name || '摸鱼'}」，确定要先结束并切换到「${cat.name}」吗？\n（当前摸鱼将自动结账归档）`
-      )
-      if (!ok) return
-      // 结束当前摸鱼
-      endActiveSlack()
+      setConfirmModal({
+        isOpen: true,
+        title: '🔄 切换摸鱼姿势',
+        message: `你当前正在进行「${activeCat?.name || '摸鱼'}」，确定要先结束并切换到「${cat.name}」吗？\n（当前摸鱼将自动结账归档入账）`,
+        confirmText: '结账并切换',
+        confirmVariant: 'warning',
+        onConfirm: () => {
+          endActiveSlack()
+          setConfirmModal(null)
+          openCategoryModal(cat)
+        },
+      })
+      return
     }
 
-    setModalCategory(cat)
-    setCustomMin('')
-
-    // 初始化时段：默认选取上班时间范围内的合法刻度
-    const slots = generateWorkTimeSlots(settings.workStart, settings.workEnd, 5)
-    if (slots.length >= 2) {
-      const nowH = now.getHours()
-      const nowM = now.getMinutes()
-      const nowTotal = nowH * 60 + nowM
-      const [sH, sM] = settings.workStart.split(':').map(Number)
-      const [eH, eM] = settings.workEnd.split(':').map(Number)
-      const startTotal = sH * 60 + sM
-      const endTotal = eH * 60 + eM
-
-      if (nowTotal >= startTotal + 15 && nowTotal <= endTotal) {
-        const currentSlotMin = Math.floor(nowTotal / 5) * 5
-        const endSlotM = Math.min(endTotal, currentSlotMin)
-        const startSlotM = Math.max(startTotal, endSlotM - 30)
-        const sStr = `${String(Math.floor(startSlotM / 60)).padStart(2, '0')}:${String(startSlotM % 60).padStart(2, '0')}`
-        const eStr = `${String(Math.floor(endSlotM / 60)).padStart(2, '0')}:${String(endSlotM % 60).padStart(2, '0')}`
-        setPeriodStart(sStr)
-        setPeriodEnd(eStr)
-      } else {
-        const defaultEndM = Math.min(endTotal, startTotal + 30)
-        const eStr = `${String(Math.floor(defaultEndM / 60)).padStart(2, '0')}:${String(defaultEndM % 60).padStart(2, '0')}`
-        setPeriodStart(settings.workStart)
-        setPeriodEnd(eStr)
-      }
-    }
+    openCategoryModal(cat)
   }
 
-  // 严格在上班时间 [workStart, workEnd] 内的刻度点（超出上班时间根本没有选项，无法被选中）
-  const workTimeSlots = useMemo(() => {
-    return generateWorkTimeSlots(settings.workStart, settings.workEnd, 5)
-  }, [settings.workStart, settings.workEnd])
+  // 打开分类操作弹窗
+  const openCategoryModal = (cat: SlackCategory) => {
+    setModalCategory(cat)
+    setModalTab('live')
+    setCustomMin(15)
 
-  const validStartSlots = useMemo(() => {
-    if (workTimeSlots.length <= 1) return workTimeSlots
-    return workTimeSlots.slice(0, -1)
-  }, [workTimeSlots])
+    // 初始化时段：默认选取上班时间范围内的合法时段
+    const nowH = now.getHours()
+    const nowM = now.getMinutes()
+    const nowTotal = nowH * 60 + nowM
+    const [sH, sM] = settings.workStart.split(':').map(Number)
+    const [eH, eM] = settings.workEnd.split(':').map(Number)
+    const startTotal = sH * 60 + sM
+    const endTotal = eH * 60 + eM
 
-  const validEndSlots = useMemo(() => {
-    if (!periodStart) return workTimeSlots.slice(1)
-    return workTimeSlots.filter((t) => t > periodStart)
-  }, [workTimeSlots, periodStart])
+    const pad = (n: number) => String(n).padStart(2, '0')
+
+    if (nowTotal >= startTotal + 10 && nowTotal <= endTotal) {
+      const endSlotM = Math.min(endTotal, nowTotal)
+      const startSlotM = Math.max(startTotal, endSlotM - 20)
+      setPeriodStart(`${pad(Math.floor(startSlotM / 60))}:${pad(startSlotM % 60)}`)
+      setPeriodEnd(`${pad(Math.floor(endSlotM / 60))}:${pad(endSlotM % 60)}`)
+    } else {
+      const defaultEndM = Math.min(endTotal, startTotal + 30)
+      setPeriodStart(settings.workStart)
+      setPeriodEnd(`${pad(Math.floor(defaultEndM / 60))}:${pad(defaultEndM % 60)}`)
+    }
+  }
 
   // 计算选定时段的分钟数
   const periodMinutes = useMemo(() => {
@@ -320,6 +302,7 @@ export default function Home() {
     setActiveSlack(newActive)
     saveActiveSlackToStorage(newActive)
     setModalCategory(null)
+    showToast.success(`⏱️ 「${modalCategory.name}」正向开摸！计时已开启，每一秒都是纯收益～`)
   }
 
   // 辅助：向后端上报并汇总今日工资表
@@ -357,7 +340,7 @@ export default function Home() {
 
     // 如果当前还没到上班时间
     if (nowTotalMin < startWorkMin) {
-      alert(`当前时间（${String(nowH).padStart(2, '0')}:${String(nowM).padStart(2, '0')}）还没到上班时间（${settings.workStart}）哦！\n带薪摸鱼只能在上班期间进行，请在下方“工作时段补录”中选择上班后的时间段～`)
+      showToast.warning(`当前时间还没到上班时间（${settings.workStart}）哦！带薪摸鱼只能在上班期间进行～`)
       return
     }
 
@@ -368,7 +351,7 @@ export default function Home() {
 
     const actualMinutes = endMin - startMin
     if (actualMinutes <= 0) {
-      alert(`所选时间超出了上班时间范围（${settings.workStart} ~ ${settings.workEnd}），无法生成有效摸鱼记录！`)
+      showToast.warning(`所选时间超出了上班范围（${settings.workStart} ~ ${settings.workEnd}），无法生成有效摸鱼记录！`)
       return
     }
 
@@ -387,8 +370,10 @@ export default function Home() {
       earned: earn,
     }
 
+    const catName = modalCategory.name
     setModalCategory(null)
     await commitRecord(newRec)
+    showToast.success(`🕒 成功补录「${catName}」${actualMinutes}分钟，白嫖 ¥${fmtMoney(earn)}！`)
   }
 
   // 统一提交摸鱼记录并同步云端权威计算结果
@@ -426,17 +411,17 @@ export default function Home() {
   const handlePeriodRecord = async () => {
     if (!modalCategory) return
     if (!periodStart || !periodEnd) {
-      alert('请完整选择摸鱼开始时间与结束时间！')
+      showToast.warning('请完整选择摸鱼开始时间与结束时间！')
       return
     }
 
     if (periodStart < settings.workStart || periodEnd > settings.workEnd) {
-      alert(`摸鱼时段只能在上班时间（${settings.workStart} ~ ${settings.workEnd}）内哦！非工作时间不计入带薪摸鱼～`)
+      showToast.warning(`摸鱼时段只能在上班时间（${settings.workStart} ~ ${settings.workEnd}）内哦！`)
       return
     }
 
     if (periodStart >= periodEnd) {
-      alert('摸鱼开始时间必须早于结束时间！')
+      showToast.warning('摸鱼开始时间必须早于结束时间！')
       return
     }
 
@@ -445,7 +430,7 @@ export default function Home() {
     const durationMinutes = (eH * 60 + eM) - (sH * 60 + sM)
 
     if (durationMinutes <= 0) {
-      alert('摸鱼时长必须大于 0 分钟！')
+      showToast.warning('摸鱼时长必须大于 0 分钟！')
       return
     }
 
@@ -466,8 +451,10 @@ export default function Home() {
       earned: earn,
     }
 
+    const catName = modalCategory.name
     setModalCategory(null)
     await commitRecord(newRec)
+    showToast.success(`🕒 成功补录「${catName}」${durationMinutes}分钟，入账 ¥${fmtMoney(earn)}！`)
   }
 
   // 结束当前正在进行的摸鱼
@@ -484,34 +471,47 @@ export default function Home() {
       earned,
     }
 
+    const catName = activeCategory?.name || '摸鱼'
     setActiveSlack(null)
     saveActiveSlackToStorage(null)
     await commitRecord(newRec)
+    showToast.success(`🏃 「${catName}」收工结账！累计白嫖 ${fmtDurationShort(elapsed)}，到手 ¥${fmtMoney(earned)}！`)
   }
 
   // 销毁单条罪证
-  const handleDeleteRecord = async (rec: SlackRecord) => {
+  const handleDeleteRecord = (rec: SlackRecord) => {
     const confirmMsg =
       DELETE_CONFIRM_MESSAGES[rec.categoryId] ||
       `确定要销毁这条摸鱼记录吗？\n价值 ¥${fmtMoney(rec.earned)} 的白嫖收益将被抹去！`
-    if (!window.confirm(confirmMsg)) return
 
-    const updated = records.filter((r) => r.id !== rec.id)
-    setRecords(updated)
-    saveRecordsToStorage(updated)
+    setConfirmModal({
+      isOpen: true,
+      title: '🗑️ 销毁摸鱼罪证',
+      message: confirmMsg,
+      confirmText: '销毁罪证',
+      confirmVariant: 'danger',
+      onConfirm: async () => {
+        setConfirmModal(null)
+        const updated = records.filter((r) => r.id !== rec.id)
+        setRecords(updated)
+        saveRecordsToStorage(updated)
+        showToast.info('🗑️ 罪证已成功销毁，神不知鬼不觉～')
 
-    // 若已登录，从云端删除并更新工资表
-    if (localStorage.getItem('moyu_token')) {
-      try {
-        await recordsApi.delete(rec.id)
-        const sumEarn = updated.reduce((s, r) => s + r.earned, 0)
-        const sumDur = updated.reduce((s, r) => s + r.duration, 0)
-        syncDailySalaryReport(updated, sumEarn, sumDur)
-      } catch (e) {
-        console.error('Failed to delete cloud record', e)
-      }
-    }
+        // 若已登录，从云端删除并更新工资表
+        if (localStorage.getItem('moyu_token')) {
+          try {
+            await recordsApi.delete(rec.id)
+            const sumEarn = updated.reduce((s, r) => s + r.earned, 0)
+            const sumDur = updated.reduce((s, r) => s + r.duration, 0)
+            syncDailySalaryReport(updated, sumEarn, sumDur)
+          } catch (e) {
+            console.error('Failed to delete cloud record', e)
+          }
+        }
+      },
+    })
   }
+
 
   // 每日工资自动心跳同步（每 60 秒上报一次实时已赚工资）
   useEffect(() => {
@@ -612,15 +612,18 @@ export default function Home() {
             </div>
           ) : (
             <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-              <span style={{ fontSize: 13, fontWeight: 800, color: '#444' }}>
-                💡 登录后可将打工档案与摸鱼收益永久同步至云端
-              </span>
-              <Link to="/login" className="auth-btn login-btn">
-                🔑 登录 / 注册
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, fontWeight: 900, background: '#fff', border: '2px solid var(--black)', padding: '3px 8px', borderRadius: 8, boxShadow: '2px 2px 0 var(--black)' }}>
+                  🔒 登录鉴权中...
+                </span>
+              </div>
+              <Link to="/login" className="auth-btn login-btn" style={{ padding: '5px 14px', fontSize: 13 }}>
+                🔑 去登录 / 注册
               </Link>
             </div>
           )}
         </div>
+
 
         {/* 英雄头 */}
         <header className="hero">
@@ -720,6 +723,9 @@ export default function Home() {
               {workStatus.label} · {workStatus.desc}
             </div>
           </div>
+          <div style={{ fontSize: 12, fontWeight: 800, color: '#555', marginBottom: 4 }}>
+            💼 今日出勤劳动已赚（秒级实时变现）
+          </div>
           <div className="niuma-earned">
             <span className="yuan">¥</span>
             {fmtMoney(todayEarned).split('.')[0]}
@@ -730,6 +736,10 @@ export default function Home() {
             <span className="tag">已打工 {fmtDurationShort(workedSeconds)}</span>
             <span className="tag" style={{ background: '#ffe4e6' }}>进度 {progressDisplay}</span>
           </div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#666', marginTop: 6 }}>
+            ⚡ 当前秒薪：¥{rates.perSecond.toFixed(4)}/秒 • 已赚金额随时间持续跳动跳现
+          </div>
+
 
           {/* 拉磨进度条 */}
           <div className="track-wrap">
@@ -922,11 +932,11 @@ export default function Home() {
 
         <footer className="foot">
           <p>⚠️ 本计算器纯属打工人娱乐，摸鱼有风险，开摸需谨慎</p>
-          <p>被老板抓到本站概不负责 · 所有数据纯本地保存，绝不上云</p>
+          <p>🛡️ 本地免登录即开即用 · 登录后支持多端无缝云端存证与老板监控大盘同步</p>
         </footer>
       </main>
 
-      {/* 9. 摸鱼操作模态框（实时开摸 or 快速补录） */}
+      {/* 9. 摸鱼操作模态框（双 Tab 结构清晰拆分：实时开摸 or 快速补录） */}
       {modalCategory && (
         <div className="moyu-modal-backdrop" onClick={() => setModalCategory(null)}>
           <div className="moyu-modal-card" onClick={(e) => e.stopPropagation()}>
@@ -934,167 +944,324 @@ export default function Home() {
             <div className="m-title">{modalCategory.name}</div>
             <div className="m-desc">{modalCategory.desc}</div>
 
-            <button className="modal-live-btn" onClick={startLiveSlack}>
-              ⏱️ 实时开摸！（正向计时）
-            </button>
-
-            <div className="modal-divider">或者直接补录摸了多久</div>
-
-            <div className="modal-quick-presets">
-              {[5, 10, 15, 30].map((m) => {
-                const earn = m * 60 * rates.perSecond
-                return (
-                  <button
-                    key={m}
-                    className="quick-chip"
-                    onClick={() => handleQuickRecord(m)}
-                  >
-                    <span>摸了 {m} 分钟</span>
-                    <span className="qc-earn">+¥{fmtMoney(earn)}</span>
-                  </button>
-                )
-              })}
-            </div>
-
-            <div className="modal-custom-row">
-              <input
-                type="number"
-                placeholder="分钟"
-                min="1"
-                max="480"
-                value={customMin}
-                onChange={(e) => setCustomMin(e.target.value)}
-              />
-              <span style={{ fontWeight: 800, fontSize: 14 }}>分钟</span>
+            {/* 双模式 Tab 切换 */}
+            <div
+              style={{
+                display: 'flex',
+                border: '3px solid var(--black)',
+                borderRadius: 12,
+                overflow: 'hidden',
+                margin: '10px 0 16px',
+                background: '#fff',
+              }}
+            >
               <button
-                className="modal-record-btn"
-                onClick={() => {
-                  const num = parseFloat(customMin)
-                  if (num > 0) handleQuickRecord(num)
-                  else alert('请输入有效的摸鱼分钟数～')
+                type="button"
+                onClick={() => setModalTab('live')}
+                style={{
+                  flex: 1,
+                  padding: '10px 0',
+                  fontWeight: 900,
+                  fontSize: 14,
+                  background: modalTab === 'live' ? 'var(--yellow)' : '#fff',
+                  border: 'none',
+                  borderRight: '2px solid var(--black)',
+                  cursor: 'pointer',
+                  transition: 'background 0.1s',
                 }}
               >
-                记上一笔
+                ⏱️ 实时正向开摸
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalTab('record')}
+                style={{
+                  flex: 1,
+                  padding: '10px 0',
+                  fontWeight: 900,
+                  fontSize: 14,
+                  background: modalTab === 'record' ? 'var(--yellow)' : '#fff',
+                  border: 'none',
+                  cursor: 'pointer',
+                  transition: 'background 0.1s',
+                }}
+              >
+                🕒 补录摸鱼时长
               </button>
             </div>
-            {parseFloat(customMin) > 0 && (
-              <div style={{ fontSize: 13, fontWeight: 900, color: '#0b6b28', marginTop: 8 }}>
-                预计白嫖收益：+¥{fmtMoney(parseFloat(customMin) * 60 * rates.perSecond)}
+
+            {/* TAB 1: 实时正向开摸 */}
+            {modalTab === 'live' && (
+              <div style={{ padding: '6px 0' }}>
+                <p style={{ fontSize: 13, fontWeight: 700, color: '#555', margin: '0 0 16px', lineHeight: 1.5 }}>
+                  人在工位心在外，每一秒都在带薪变现！<br />
+                  点击立即启动计时，随时可收工结账入账。
+                </p>
+                <button className="modal-live-btn" onClick={startLiveSlack} style={{ fontSize: 17, padding: '14px' }}>
+                  🚀 启动「{modalCategory.name}」正向计时！
+                </button>
               </div>
             )}
 
-            {/* 3. 自定义上班时段精确补录（严格限制在上班时间范围内，超出上班时间根本没有选项，无法选中） */}
-            <div
-              style={{
-                marginTop: 14,
-                padding: '12px 10px',
-                background: '#fffdf0',
-                border: '2px dashed var(--black)',
-                borderRadius: 10,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 13, fontWeight: 900 }}>🕒 工作时段精确补录</span>
-                <span style={{ fontSize: 11, fontWeight: 800, color: '#ff0055' }}>
-                  仅限上班时间: {settings.workStart} ~ {settings.workEnd}
-                </span>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ fontSize: 10, fontWeight: 800, color: '#666' }}>开始时间（上班中）</span>
-                  <select
-                    value={periodStart}
-                    onChange={(e) => {
-                      const newStart = e.target.value
-                      setPeriodStart(newStart)
-                      if (periodEnd && periodEnd <= newStart) {
-                        const nextSlot = workTimeSlots.find((t) => t > newStart)
-                        if (nextSlot) setPeriodEnd(nextSlot)
-                      }
-                    }}
-                    style={{
-                      width: '100%',
-                      padding: '7px 6px',
-                      border: '2px solid var(--black)',
-                      borderRadius: 8,
-                      fontWeight: 800,
-                      fontSize: 13,
-                      background: '#fff',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {validStartSlots.map((slot) => (
-                      <option key={slot} value={slot}>
-                        {slot}
-                      </option>
-                    ))}
-                  </select>
+            {/* TAB 2: 补录时长（0-60分钟自由微调 + 工作时段精确补录） */}
+            {modalTab === 'record' && (
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 800, color: '#666', marginBottom: 8, textAlign: 'left' }}>
+                  ⚡ 常用快捷时长录入：
+                </div>
+                <div className="modal-quick-presets">
+                  {[5, 10, 15, 20, 30, 45, 60].map((m) => {
+                    const earn = m * 60 * rates.perSecond
+                    return (
+                      <button
+                        key={m}
+                        className="quick-chip"
+                        onClick={() => handleQuickRecord(m)}
+                        title={`快捷录入 ${m} 分钟`}
+                      >
+                        <span>{m} 分钟</span>
+                        <span className="qc-earn">+¥{fmtMoney(earn)}</span>
+                      </button>
+                    )
+                  })}
                 </div>
 
-                <span style={{ fontWeight: 900, fontSize: 13, marginTop: 14 }}>至</span>
+                {/* 0-60 分钟自由微调与滑块 */}
+                <div style={{ marginTop: 12, padding: '10px 12px', background: '#f8fafc', borderRadius: 10, border: '2px solid var(--black)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 900, color: '#444' }}>🎛️ 自由调节时长 (0-60分钟)：</span>
+                    <span style={{ fontSize: 14, fontWeight: 900, color: 'var(--black)' }}>
+                      <strong>{Number(customMin) || 0}</strong> 分钟
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="60"
+                    value={Math.min(60, Math.max(1, Number(customMin) || 1))}
+                    onChange={(e) => setCustomMin(Number(e.target.value))}
+                    style={{ width: '100%', accentColor: 'var(--black)', cursor: 'pointer', margin: '4px 0' }}
+                  />
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button
+                        type="button"
+                        onClick={() => setCustomMin((prev) => Math.max(1, (Number(prev) || 0) - 5))}
+                        style={{ padding: '4px 8px', border: '2px solid var(--black)', borderRadius: 6, background: '#fff', fontWeight: 900, cursor: 'pointer', fontSize: 11 }}
+                      >
+                        -5分
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCustomMin((prev) => Math.max(1, (Number(prev) || 0) - 1))}
+                        style={{ padding: '4px 8px', border: '2px solid var(--black)', borderRadius: 6, background: '#fff', fontWeight: 900, cursor: 'pointer', fontSize: 11 }}
+                      >
+                        -1分
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCustomMin((prev) => Math.min(480, (Number(prev) || 0) + 1))}
+                        style={{ padding: '4px 8px', border: '2px solid var(--black)', borderRadius: 6, background: '#fff', fontWeight: 900, cursor: 'pointer', fontSize: 11 }}
+                      >
+                        +1分
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCustomMin((prev) => Math.min(480, (Number(prev) || 0) + 5))}
+                        style={{ padding: '4px 8px', border: '2px solid var(--black)', borderRadius: 6, background: '#fff', fontWeight: 900, cursor: 'pointer', fontSize: 11 }}
+                      >
+                        +5分
+                      </button>
+                    </div>
 
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ fontSize: 10, fontWeight: 800, color: '#666' }}>结束时间（上班中）</span>
-                  <select
-                    value={periodEnd}
-                    onChange={(e) => setPeriodEnd(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '7px 6px',
-                      border: '2px solid var(--black)',
-                      borderRadius: 8,
-                      fontWeight: 800,
-                      fontSize: 13,
-                      background: '#fff',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {validEndSlots.map((slot) => (
-                      <option key={slot} value={slot}>
-                        {slot}
-                      </option>
-                    ))}
-                  </select>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input
+                        type="number"
+                        min="1"
+                        max="480"
+                        value={customMin}
+                        onChange={(e) => setCustomMin(e.target.value)}
+                        style={{
+                          width: 60,
+                          padding: '4px 6px',
+                          border: '2px solid var(--black)',
+                          borderRadius: 6,
+                          fontWeight: 900,
+                          textAlign: 'center',
+                          fontSize: 13,
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="modal-record-btn"
+                        onClick={() => {
+                          const num = parseFloat(String(customMin))
+                          if (num > 0) handleQuickRecord(num)
+                          else showToast.warning('请输入大于 0 的有效摸鱼分钟数～')
+                        }}
+                        style={{ padding: '6px 12px', fontSize: 13 }}
+                      >
+                        记上一笔
+                      </button>
+                    </div>
+                  </div>
+
+                  {parseFloat(String(customMin)) > 0 && (
+                    <div style={{ fontSize: 12, fontWeight: 900, color: '#0b6b28', marginTop: 8, textAlign: 'right' }}>
+                      预计白嫖收益：+¥{fmtMoney(parseFloat(String(customMin)) * 60 * rates.perSecond)}
+                    </div>
+                  )}
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handlePeriodRecord}
+                {/* 工作时段精确补录（抛弃长select，改用规范time input） */}
+                <div
                   style={{
-                    padding: '8px 12px',
-                    background: 'var(--yellow)',
-                    border: '2px solid var(--black)',
-                    borderRadius: 8,
-                    fontWeight: 900,
-                    fontSize: 13,
-                    cursor: 'pointer',
-                    boxShadow: '2px 2px 0 var(--black)',
-                    whiteSpace: 'nowrap',
                     marginTop: 14,
+                    padding: '12px 10px',
+                    background: '#fffdf0',
+                    border: '2px dashed var(--black)',
+                    borderRadius: 10,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                    textAlign: 'left',
                   }}
                 >
-                  确定补录
-                </button>
-              </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 900 }}>🕒 工作时段精确补录</span>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: '#ff0055', background: '#ffe4e6', padding: '2px 6px', borderRadius: 4, border: '1px solid var(--black)' }}>
+                      🏢 基线范围: {settings.workStart} ~ {settings.workEnd}
+                    </span>
+                  </div>
 
-              {periodMinutes > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, fontWeight: 900, marginTop: 4 }}>
-                  <span style={{ color: '#444' }}>选定时长: {periodMinutes} 分钟</span>
-                  <span style={{ color: '#0b6b28' }}>预计白嫖: +¥{fmtMoney(periodMinutes * 60 * rates.perSecond)}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: 100, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: '#666' }}>开始时间</span>
+                      <input
+                        type="time"
+                        value={periodStart}
+                        min={settings.workStart}
+                        max={settings.workEnd}
+                        onChange={(e) => setPeriodStart(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '8px',
+                          border: '2px solid var(--black)',
+                          borderRadius: 8,
+                          fontWeight: 800,
+                          fontSize: 14,
+                          background: '#fff',
+                          fontFamily: 'inherit',
+                        }}
+                      />
+                    </div>
+
+                    <span style={{ fontWeight: 900, fontSize: 14, marginTop: 16 }}>至</span>
+
+                    <div style={{ flex: 1, minWidth: 100, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: '#666' }}>结束时间</span>
+                      <input
+                        type="time"
+                        value={periodEnd}
+                        min={settings.workStart}
+                        max={settings.workEnd}
+                        onChange={(e) => setPeriodEnd(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '8px',
+                          border: '2px solid var(--black)',
+                          borderRadius: 8,
+                          fontWeight: 800,
+                          fontSize: 14,
+                          background: '#fff',
+                          fontFamily: 'inherit',
+                        }}
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handlePeriodRecord}
+                      style={{
+                        padding: '8px 14px',
+                        background: 'var(--yellow)',
+                        border: '2px solid var(--black)',
+                        borderRadius: 8,
+                        fontWeight: 900,
+                        fontSize: 13,
+                        cursor: 'pointer',
+                        boxShadow: '2px 2px 0 var(--black)',
+                        whiteSpace: 'nowrap',
+                        marginTop: 16,
+                      }}
+                    >
+                      确认补录
+                    </button>
+                  </div>
+
+                  {/* 快捷基线辅助标签 */}
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                    <button
+                      type="button"
+                      onClick={() => setPeriodStart(settings.workStart)}
+                      style={{ fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 4, border: '1px solid #999', background: '#fff', cursor: 'pointer' }}
+                    >
+                      🕒 开工点 ({settings.workStart})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date()
+                        const pad = (n: number) => String(n).padStart(2, '0')
+                        const curT = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+                        if (curT <= settings.workEnd && curT >= settings.workStart) {
+                          setPeriodEnd(curT)
+                        } else {
+                          showToast.info(`当前时间（${curT}）不在上班时间内，已自动对齐下班点～`)
+                          setPeriodEnd(settings.workEnd)
+                        }
+                      }}
+                      style={{ fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 4, border: '1px solid #999', background: '#fff', cursor: 'pointer' }}
+                    >
+                      ⏱️ 对齐当前时间
+                    </button>
+                  </div>
+
+                  {periodMinutes > 0 ? (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, fontWeight: 900, marginTop: 4, background: '#fff', padding: '4px 8px', borderRadius: 6, border: '1px solid #e0e0e0' }}>
+                      <span style={{ color: '#444' }}>选定时长: {periodMinutes} 分钟</span>
+                      <span style={{ color: '#0b6b28' }}>预计入账: +¥{fmtMoney(periodMinutes * 60 * rates.perSecond)}</span>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 11, fontWeight: 800, color: '#e11d48' }}>
+                      ⚠️ 请确保开始时间早于结束时间，且在上班时段（{settings.workStart} ~ {settings.workEnd}）内！
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
 
             <button className="modal-cancel-btn" onClick={() => setModalCategory(null)}>
-              暂不开摸，撤回
+              暂不开摸，关闭
             </button>
           </div>
         </div>
       )}
+
+      {/* 10. 全局操作确认弹窗（替代系统级原生 confirm） */}
+      {confirmModal && (
+        <ConfirmModal
+          isOpen={confirmModal.isOpen}
+          title={confirmModal.title}
+          message={confirmModal.message}
+          confirmText={confirmModal.confirmText}
+          cancelText={confirmModal.cancelText}
+          confirmVariant={confirmModal.confirmVariant}
+          onConfirm={confirmModal.onConfirm}
+          onCancel={() => setConfirmModal(null)}
+        />
+      )}
     </div>
   )
 }
+

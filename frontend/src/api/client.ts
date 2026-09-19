@@ -78,12 +78,17 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const data = await res.json().catch(() => null)
 
   if (!res.ok) {
+    if (res.status === 401) {
+      localStorage.removeItem('moyu_token')
+      localStorage.removeItem('moyu_user')
+    }
     const msg = data?.detail || data?.message || '请求失败 (' + res.status + ')'
     throw new Error(msg)
   }
 
   return data as T
 }
+
 
 // 认证接口
 export const authApi = {
@@ -151,7 +156,14 @@ export interface AdminStatsData {
 
 // 摸鱼流水接口
 export const recordsApi = {
-  getToday: () => request<any[]>('/records?date_str='),
+  getToday: (dateStr?: string) => {
+    const d = dateStr || (() => {
+      const now = new Date()
+      const pad = (n: number) => String(n).padStart(2, '0')
+      return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+    })()
+    return request<any[]>('/records?date_str=' + encodeURIComponent(d))
+  },
   getByDate: (dateStr: string) => request<any[]>('/records?date_str=' + encodeURIComponent(dateStr)),
   listAll: () => request<any[]>('/records'),
   create: (body: { id: string; category_id: string; start_time: number | string; end_time: number | string; duration?: number; earned?: number }) => {
@@ -217,5 +229,14 @@ export const adminApi = {
     if (params?.month) q.set('month', String(params.month))
     if (params?.limit) q.set('limit', String(params.limit))
     return request<DailySalaryRecord[]>('/admin/salaries?' + q.toString())
+  },
+
+  getRecords: (params?: { limit?: number; user_id?: number; category_id?: string; date_str?: string }) => {
+    const q = new URLSearchParams()
+    if (params?.limit) q.set('limit', String(params.limit))
+    if (params?.user_id) q.set('user_id', String(params.user_id))
+    if (params?.category_id) q.set('category_id', params.category_id)
+    if (params?.date_str) q.set('date_str', params.date_str)
+    return request<any[]>('/admin/records?' + q.toString())
   },
 }

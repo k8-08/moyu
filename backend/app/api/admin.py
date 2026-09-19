@@ -82,23 +82,31 @@ def get_stats(
     if dimension in ("today", "day"):
         salary_filters.append(DailySalary.date == today_str)
         start_t = datetime.combine(now.date(), time.min)
+        end_t = datetime.combine(now.date(), time.max)
         record_filters.append(SlackRecord.start_time >= start_t)
+        record_filters.append(SlackRecord.start_time <= end_t)
         days_multiplier = 1.0
     elif dimension == "week":
         salary_filters.extend([DailySalary.year == current_year, DailySalary.week == current_week])
         start_w = now - timedelta(days=now.weekday())
         start_w_dt = datetime.combine(start_w.date(), time.min)
+        end_w_dt = datetime.combine(now.date(), time.max)
         record_filters.append(SlackRecord.start_time >= start_w_dt)
+        record_filters.append(SlackRecord.start_time <= end_w_dt)
         days_multiplier = 5.0
     elif dimension == "month":
         salary_filters.extend([DailySalary.year == current_year, DailySalary.month == current_month])
         start_m_dt = datetime(current_year, current_month, 1)
+        end_m_dt = datetime.combine(now.date(), time.max)
         record_filters.append(SlackRecord.start_time >= start_m_dt)
+        record_filters.append(SlackRecord.start_time <= end_m_dt)
         days_multiplier = 21.75
     elif dimension == "year":
         salary_filters.append(DailySalary.year == current_year)
         start_y_dt = datetime(current_year, 1, 1)
+        end_y_dt = datetime.combine(now.date(), time.max)
         record_filters.append(SlackRecord.start_time >= start_y_dt)
+        record_filters.append(SlackRecord.start_time <= end_y_dt)
         # 修复整年出勤底薪只算1个月的Bug：按本年已过的月份自然核算
         days_multiplier = max(1.0, float(current_month)) * 21.75
     else: # all
@@ -239,5 +247,49 @@ def get_all_salaries(
             "slack_count": int(s.slack_count or 0),
             "slack_duration": int(s.slack_duration or 0),
             "updated_at": s.updated_at.strftime("%Y-%m-%d %H:%M") if s.updated_at else ""
+        })
+    return result
+
+@router.get("/records", summary="获取全体或指定员工的摸鱼明细流水记录")
+def get_all_records(
+    limit: int = Query(100, ge=1, le=500),
+    user_id: Optional[int] = None,
+    category_id: Optional[str] = None,
+    date_str: Optional[str] = None,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    query = db.query(SlackRecord).options(
+        joinedload(SlackRecord.user)
+    )
+    if user_id:
+        query = query.filter(SlackRecord.user_id == user_id)
+    if category_id:
+        query = query.filter(SlackRecord.category_id == category_id)
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            start_dt = datetime.combine(target_date, time.min)
+            end_dt = datetime.combine(target_date, time.max)
+            query = query.filter(SlackRecord.start_time >= start_dt, SlackRecord.start_time <= end_dt)
+        except ValueError:
+            pass
+
+    records = query.order_by(SlackRecord.start_time.desc(), SlackRecord.created_at.desc()).limit(limit).all()
+
+    result = []
+    for r in records:
+        u = r.user
+        result.append({
+            "id": r.id,
+            "user_id": r.user_id,
+            "user_nickname": u.nickname if u else f"打工人#{r.user_id}",
+            "user_username": u.username if u else "未知",
+            "category_id": r.category_id,
+            "start_time": r.start_time.strftime("%Y-%m-%d %H:%M:%S") if r.start_time else "",
+            "end_time": r.end_time.strftime("%Y-%m-%d %H:%M:%S") if r.end_time else "",
+            "duration": int(r.duration or 0),
+            "earned": round(float(r.earned or 0.0), 2),
+            "created_at": r.created_at.strftime("%Y-%m-%d %H:%M:%S") if r.created_at else ""
         })
     return result

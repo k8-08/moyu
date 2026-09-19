@@ -1135,12 +1135,124 @@ body {
   text-decoration: underline;
 }
 
-@media (max-width: 620px) {
-  .fields { grid-template-columns: 1fr; }
-  .grid2 { grid-template-columns: 1fr; }
-  .fish { font-size: 26px; }
-  .slack-grid { grid-template-columns: repeat(2, 1fr); }
-  .summary-board { grid-template-columns: 1fr; }
+/* ---------- 响应式与移动端专属适配 ---------- */
+@media (max-width: 640px) {
+  .container {
+    padding: 0 12px;
+  }
+  .card {
+    padding: 16px 14px;
+    margin: 14px 0;
+    border-radius: 14px;
+    box-shadow: 4px 4px 0 var(--black);
+    border-width: 3px;
+  }
+  .fields {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
+  .fish {
+    display: none; /* 小屏隐藏背景飘鱼，避免干扰触控与遮挡 */
+  }
+  .slack-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+  .slack-tile {
+    padding: 12px 6px;
+    border-radius: 12px;
+    border-width: 3px;
+    box-shadow: 3px 3px 0 var(--black);
+  }
+  .slack-tile .tile-emoji {
+    font-size: 32px;
+  }
+  .slack-tile .tile-name {
+    font-size: 14px;
+  }
+  .slack-tile .tile-desc {
+    font-size: 11px;
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .summary-board {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .items {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+  .hero {
+    padding: 24px 0 16px;
+  }
+  .hero h1 {
+    font-size: clamp(32px, 9vw, 44px);
+  }
+  .hero h1 .hl {
+    padding: 0 8px;
+    border-width: 3px;
+  }
+  .hero .sub {
+    font-size: 14px;
+    margin-top: 10px;
+  }
+  .auth-bar {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+  .moyu-modal-backdrop {
+    padding: 10px;
+  }
+  .moyu-modal-card {
+    padding: 18px 14px;
+    border-radius: 16px;
+    box-shadow: 6px 6px 0 var(--black);
+    border-width: 3px;
+    max-width: 94vw;
+  }
+  .moyu-modal-card .m-emoji {
+    font-size: 38px;
+  }
+  .moyu-modal-card .m-title {
+    font-size: 20px;
+  }
+  .quick-chip {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  /* 防止 iOS Safari 点击输入框页面自动缩放错位 */
+  input[type="text"],
+  input[type="number"],
+  input[type="password"],
+  input[type="time"],
+  select {
+    font-size: 16px !important;
+  }
+
+  /* 数据表格移动端横向平滑滚动体验 */
+  table {
+    min-width: 480px;
+  }
+}
+
+@media (max-width: 400px) {
+  .slack-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+  .hero h1 {
+    font-size: 30px;
+  }
+  .card h2 {
+    font-size: 17px;
+  }
 }
 
 /* ---------- 顶部用户状态栏 ---------- */
