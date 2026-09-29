@@ -34,6 +34,8 @@ export interface UserProfile {
   work_end: string
   lunch_start: string
   lunch_end: string
+  work_schedule?: string
+  adjustment_dates?: string
 }
 
 export interface DailySalaryRecord {

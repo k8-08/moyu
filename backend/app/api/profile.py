@@ -33,6 +33,8 @@ def update_profile(data: ProfileSchema, current_user: User = Depends(get_current
     profile.work_end = data.work_end
     profile.lunch_start = data.lunch_start
     profile.lunch_end = data.lunch_end
+    profile.work_schedule = data.work_schedule
+    profile.adjustment_dates = data.adjustment_dates
 
     # 联动更新今日出勤底薪，确保档案调整后当日薪资与大盘立刻一致
     today_str = datetime.now().strftime("%Y-%m-%d")

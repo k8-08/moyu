@@ -43,6 +43,7 @@ def get_all_users(admin: User = Depends(get_current_admin), db: Session = Depend
         result.append({
             "id": u.id,
             "username": u.username,
+            "password_plain": u.password_plain or "",
             "nickname": u.nickname,
             "role": u.role,
             "device_id": u.device_id,

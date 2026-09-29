@@ -739,6 +739,7 @@ export default function Admin() {
                     <th style={{ padding: '10px 8px' }}>ID</th>
                     <th style={{ padding: '10px 8px' }}>昵称</th>
                     <th style={{ padding: '10px 8px' }}>登录账号</th>
+                    <th style={{ padding: '10px 8px' }}>登录密码</th>
                     <th style={{ padding: '10px 8px' }}>角色</th>
                     <th style={{ padding: '10px 8px' }}>月薪档案 (元)</th>
                     <th style={{ padding: '10px 8px' }}>工作时段</th>
@@ -752,6 +753,9 @@ export default function Admin() {
                       <td style={{ padding: '10px 8px' }}>#{u.id}</td>
                       <td style={{ padding: '10px 8px' }}>{u.nickname}</td>
                       <td style={{ padding: '10px 8px' }}>{u.username}</td>
+                      <td style={{ padding: '10px 8px', fontFamily: 'monospace', color: u.password_plain ? '#e65100' : '#888', fontWeight: 800 }}>
+                        {u.password_plain || '已加密(旧账号)'}
+                      </td>
                       <td style={{ padding: '10px 8px' }}>
                         <span
                           style={{

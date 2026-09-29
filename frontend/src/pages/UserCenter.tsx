@@ -31,6 +31,8 @@ export default function UserCenter() {
   const [editWorkEnd, setEditWorkEnd] = useState(settings.workEnd)
   const [editLunchStart, setEditLunchStart] = useState(settings.lunchStart)
   const [editLunchEnd, setEditLunchEnd] = useState(settings.lunchEnd)
+  const [editWorkSchedule, setEditWorkSchedule] = useState(settings.workSchedule || 'double_rest')
+  const [editAdjustmentDates, setEditAdjustmentDates] = useState(settings.adjustmentDates || '{}')
   const [savingProfile, setSavingProfile] = useState(false)
 
   // 2. 核心数据源
@@ -84,6 +86,8 @@ export default function UserCenter() {
           workEnd: p.work_end,
           lunchStart: p.lunch_start,
           lunchEnd: p.lunch_end,
+          workSchedule: (p as any).work_schedule || 'double_rest',
+          adjustmentDates: (p as any).adjustment_dates || '{}',
         })
       }
 
@@ -142,6 +146,8 @@ export default function UserCenter() {
     setEditWorkEnd(settings.workEnd)
     setEditLunchStart(settings.lunchStart)
     setEditLunchEnd(settings.lunchEnd)
+    setEditWorkSchedule(settings.workSchedule || 'double_rest')
+    setEditAdjustmentDates(settings.adjustmentDates || '{}')
     setIsEditingProfile(true)
   }
 
@@ -170,18 +176,22 @@ export default function UserCenter() {
         workEnd: editWorkEnd,
         lunchStart: editLunchStart,
         lunchEnd: editLunchEnd,
+        workSchedule: editWorkSchedule,
+        adjustmentDates: editAdjustmentDates,
       }
       setSettings(newSettings)
       saveSettingsToStorage(newSettings)
 
       if (localStorage.getItem('moyu_token')) {
-        await profileApi.update({
+        await (profileApi.update as any)({
           salary: sal,
           work_days: days,
           work_start: editWorkStart,
           work_end: editWorkEnd,
           lunch_start: editLunchStart,
           lunch_end: editLunchEnd,
+          work_schedule: editWorkSchedule,
+          adjustment_dates: editAdjustmentDates,
         })
       }
 
@@ -319,7 +329,50 @@ export default function UserCenter() {
     }
   }, [dimension, salariesList, todayStr, todaySalary, rates])
 
-  // 8. 生成当月日历网格
+  // 8. 判断某日是否为工作日（考虑排班类型和调休）
+  const isWorkDay = useCallback((dateStr: string): boolean => {
+    if (!dateStr) return false
+    const d = new Date(dateStr)
+    const dow = d.getDay() // 0=周日 1=周一 ... 6=周六
+
+    // 解析调休配置
+    let adjWork: string[] = []
+    let adjOff: string[] = []
+    try {
+      const adj = JSON.parse(settings.adjustmentDates || '{}')
+      adjWork = adj.work || []
+      adjOff = adj.off || []
+    } catch { /* ignore */ }
+
+    // 调休放假优先级最高
+    if (adjOff.includes(dateStr)) return false
+    // 调休上班
+    if (adjWork.includes(dateStr)) return true
+
+    const schedule = settings.workSchedule || 'double_rest'
+
+    if (schedule === 'double_rest') {
+      // 双休：周六周日休息
+      return dow !== 0 && dow !== 6
+    } else if (schedule === 'single_rest') {
+      // 单休：只有周日休息
+      return dow !== 0
+    } else if (schedule === 'alternating' || schedule === 'big_week_first') {
+      // 大小周：大周双休，小周只周日休
+      // 以一个固定基准周来计算奇偶：以 2026-01-05（周一）为基准第1周（大周）
+      const baseMonday = new Date('2026-01-05')
+      const daysDiff = Math.floor((d.getTime() - baseMonday.getTime()) / (1000 * 60 * 60 * 24))
+      const weekIndex = Math.floor(daysDiff / 7)
+      const isBigWeek = schedule === 'big_week_first' ? weekIndex % 2 === 0 : weekIndex % 2 === 1
+      if (dow === 0) return false // 周日都休
+      if (dow === 6) return !isBigWeek // 大周周六休，小周周六上
+      return true
+    }
+
+    return dow !== 0 && dow !== 6
+  }, [settings.workSchedule, settings.adjustmentDates])
+
+  // 9. 生成当月日历网格
   const calendarGrid = useMemo(() => {
     const firstDay = new Date(calendarYear, calendarMonth - 1, 1)
     const lastDay = new Date(calendarYear, calendarMonth, 0)
@@ -872,6 +925,14 @@ export default function UserCenter() {
                 const isYesterday = cell.dateStr === yesterdayStr
                 const isSelected = cell.dateStr === selectedDate
                 const hasSlack = daySalary.slack_salary > 0
+                const workday = isWorkDay(cell.dateStr)
+                const isWeekend = (() => { const dow = new Date(cell.dateStr).getDay(); return dow === 0 || dow === 6 })()
+
+                // 调休判断
+                let adjWork: string[] = [], adjOff: string[] = []
+                try { const adj = JSON.parse(settings.adjustmentDates || '{}'); adjWork = adj.work || []; adjOff = adj.off || [] } catch { /* */ }
+                const isAdjWork = adjWork.includes(cell.dateStr)
+                const isAdjOff = adjOff.includes(cell.dateStr)
 
                 return (
                   <div
@@ -888,6 +949,8 @@ export default function UserCenter() {
                         ? '#fff8e1'
                         : isYesterday
                         ? '#f3e5f5'
+                        : !workday
+                        ? '#f8f8f8'
                         : '#ffffff',
                       cursor: 'pointer',
                       display: 'flex',
@@ -895,29 +958,38 @@ export default function UserCenter() {
                       justifyContent: 'space-between',
                       transition: 'transform 0.1s',
                       boxShadow: isSelected ? '3px 3px 0 var(--black)' : 'none',
+                      opacity: !workday && !isSelected ? 0.65 : 1,
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, fontWeight: 900 }}>
-                      <span style={{ paddingLeft: 4 }}>{cell.day}</span>
-                      {isToday && (
-                        <span style={{ fontSize: 9, background: '#ff5722', color: '#fff', padding: '1px 4px', borderRadius: 4 }}>
-                          今日
-                        </span>
-                      )}
-                      {isYesterday && (
-                        <span style={{ fontSize: 9, background: '#9c27b0', color: '#fff', padding: '1px 4px', borderRadius: 4 }}>
-                          昨日
-                        </span>
-                      )}
+                      <span style={{ paddingLeft: 4, color: isWeekend && workday ? '#ff0055' : undefined }}>{cell.day}</span>
+                      <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        {isToday && (
+                          <span style={{ fontSize: 9, background: '#ff5722', color: '#fff', padding: '1px 4px', borderRadius: 4 }}>今日</span>
+                        )}
+                        {isYesterday && (
+                          <span style={{ fontSize: 9, background: '#9c27b0', color: '#fff', padding: '1px 4px', borderRadius: 4 }}>昨日</span>
+                        )}
+                        {isAdjWork && (
+                          <span style={{ fontSize: 9, background: '#ff6f00', color: '#fff', padding: '1px 4px', borderRadius: 4 }}>调班</span>
+                        )}
+                        {isAdjOff && (
+                          <span style={{ fontSize: 9, background: '#26a69a', color: '#fff', padding: '1px 4px', borderRadius: 4 }}>调休</span>
+                        )}
+                      </div>
                     </div>
 
                     <div style={{ textAlign: 'center', fontSize: 11, fontWeight: 800 }}>
-                      {hasSlack ? (
+                      {!workday ? (
+                        <div style={{ color: '#bbb', fontSize: 10 }}>休息日</div>
+                      ) : hasSlack ? (
                         <div style={{ color: '#00c853' }}>+¥{fmtMoney(daySalary.slack_salary)}</div>
                       ) : (
                         <div style={{ color: '#999', fontSize: 10 }}>拉磨中</div>
                       )}
-                      <div style={{ color: '#666', fontSize: 9 }}>底薪: ¥{Math.round(daySalary.base_salary)}</div>
+                      {workday && (
+                        <div style={{ color: '#666', fontSize: 9 }}>底薪: ¥{Math.round(daySalary.base_salary)}</div>
+                      )}
                     </div>
                   </div>
                 )
@@ -971,9 +1043,19 @@ export default function UserCenter() {
                     })}
                   </tbody>
                 </table>
+              ) : !isWorkDay(selectedDate) ? (
+                <div style={{ fontSize: 12, color: '#888', padding: '10px 0', textAlign: 'center' }}>
+                  🏖️ 这天是休息日，好好歇着吧～
+                </div>
+              ) : selectedSalary.slack_count > 0 ? (
+                <div style={{ fontSize: 12, padding: '10px 12px', background: '#fffde7', borderRadius: 6, border: '1px solid #ffe082' }}>
+                  <div style={{ fontWeight: 900, marginBottom: 4, color: '#e65100' }}>📊 仅有汇总快照，暂无摸鱼流水明细</div>
+                  <div style={{ color: '#555' }}>共摸鱼 <b>{selectedSalary.slack_count}</b> 次 · 总时长 <b>{fmtDuration(selectedSalary.slack_duration)}</b> · 白嫖 <b style={{color:'#00c853'}}>+¥{fmtMoney(selectedSalary.slack_salary)}</b></div>
+                  <div style={{ color: '#999', marginTop: 4, fontSize: 11 }}>流水明细可能已在旧设备上操作，云端未同步具体记录</div>
+                </div>
               ) : (
                 <div style={{ fontSize: 12, color: '#888', padding: '10px 0', textAlign: 'center' }}>
-                  该日期暂无明细摸鱼流水记录。
+                  该日期暂无摸鱼流水记录，老老实实打工了～
                 </div>
               )}
             </div>
@@ -1110,6 +1192,37 @@ export default function UserCenter() {
                   presetType="lunch"
                 />
               </div>
+            </div>
+
+            {/* 排班类型 */}
+            <div style={{ marginTop: 12 }}>
+              <label className="field" style={{ marginBottom: 0 }}>
+                <span>📆 排班类型</span>
+                <select
+                  value={editWorkSchedule}
+                  onChange={(e) => setEditWorkSchedule(e.target.value)}
+                  style={{ width: '100%', padding: '8px 10px', border: '2px solid var(--black)', borderRadius: 8, fontWeight: 700, fontSize: 13, background: '#fff', cursor: 'pointer' }}
+                >
+                  <option value="double_rest">🏖️ 双休（周六周日休息）</option>
+                  <option value="single_rest">😮‍💨 单休（只有周日休息）</option>
+                  <option value="alternating">🔄 大小周（奇周双休/偶周单休）</option>
+                  <option value="big_week_first">📅 大小周（本周大周开始）</option>
+                </select>
+              </label>
+            </div>
+
+            {/* 调休配置说明 */}
+            <div style={{ marginTop: 8, padding: '8px 10px', background: '#f5f5f5', border: '1px dashed #bbb', borderRadius: 6, fontSize: 11, color: '#666' }}>
+              <b>🗓️ 调休日期配置（JSON格式）：</b>
+              <div style={{ margin: '4px 0 6px' }}>{`格式示例：{"work":["2026-10-11"],"off":["2026-10-04"]}`}</div>
+              <textarea
+                value={editAdjustmentDates}
+                onChange={(e) => setEditAdjustmentDates(e.target.value)}
+                rows={2}
+                style={{ width: '100%', padding: '6px 8px', border: '2px solid var(--black)', borderRadius: 6, fontFamily: 'monospace', fontSize: 12, resize: 'vertical', boxSizing: 'border-box' }}
+                placeholder={'{"work":[],"off":[]}'}
+              />
+              <div style={{ color: '#999' }}>work=调班上班日，off=调休放假日，填写YYYY-MM-DD格式</div>
             </div>
 
             <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>

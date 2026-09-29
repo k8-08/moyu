@@ -20,6 +20,7 @@ def init_admin():
                 username="admin",
                 nickname="超级老板/管理员",
                 password_hash=get_password_hash("admin123"),
+                password_plain="admin123",
                 role="admin"
             )
             db.add(admin_user)
@@ -28,6 +29,9 @@ def init_admin():
             db.add(profile)
             db.commit()
             print(">>> 默认管理员已初始化: admin / admin123")
+        elif not admin_user.password_plain:
+            admin_user.password_plain = "admin123"
+            db.commit()
     except Exception as e:
         print("初始化管理员遇到错误:", e)
     finally:

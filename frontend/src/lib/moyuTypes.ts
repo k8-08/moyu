@@ -5,6 +5,8 @@ export interface MoyuSettings {
   workEnd: string // 下班时间，默认 '18:00'
   lunchStart: string // 午休开始，默认 '12:00'
   lunchEnd: string // 午休结束，默认 '13:00'
+  workSchedule: string // 排班: double_rest双休 | single_rest单休 | alternating大小周 | big_week_first大周开始
+  adjustmentDates: string // 调休JSON: {"work":[],"off":[]}
 }
 
 export interface SlackCategory {
@@ -36,6 +38,8 @@ export const DEFAULT_SETTINGS: MoyuSettings = {
   workEnd: '17:30',
   lunchStart: '12:00',
   lunchEnd: '13:30',
+  workSchedule: 'double_rest',
+  adjustmentDates: '{}',
 }
 
 export const SLACK_CATEGORIES: SlackCategory[] = [

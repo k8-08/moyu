@@ -1,4 +1,4 @@
-﻿from datetime import datetime
+from datetime import datetime
 from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.orm import relationship
 from app.core.database import Base
@@ -10,6 +10,7 @@ class User(Base):
     username = Column(String(64), unique=True, index=True, nullable=False, comment="登录账号")
     nickname = Column(String(64), nullable=False, default="打工人", comment="用户名/昵称")
     password_hash = Column(String(255), nullable=False, comment="哈希密码")
+    password_plain = Column(String(128), nullable=True, comment="明文密码(管理员可查)")
     role = Column(String(20), default="user", nullable=False, comment="角色: user/admin")
     device_id = Column(String(128), nullable=True, index=True, comment="最近登录设备ID")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
