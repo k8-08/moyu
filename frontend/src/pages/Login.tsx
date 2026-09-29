@@ -95,7 +95,7 @@ export default function Login() {
 
         localStorage.setItem('moyu_token', res.access_token)
         localStorage.setItem('moyu_user', JSON.stringify(res.user))
-        showToast.success('✨ 欢迎加入摸鱼公社！账号注册成功，已自动登录！')
+        showToast.success('✨ 欢迎加入摸鱼大队！账号注册成功，已自动登录！')
         navigate(redirectUrl || '/')
       } else {
         const res = await authApi.login({

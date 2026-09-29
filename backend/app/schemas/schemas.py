@@ -43,6 +43,8 @@ class ProfileSchema(BaseModel):
     work_end: str = Field(default="17:30", pattern=r"^\d{2}:\d{2}$", description="下班时间 HH:mm")
     lunch_start: str = Field(default="12:00", pattern=r"^\d{2}:\d{2}$", description="午休开始 HH:mm")
     lunch_end: str = Field(default="13:30", pattern=r"^\d{2}:\d{2}$", description="午休结束 HH:mm")
+    work_schedule: Optional[str] = Field(default="double_rest", description="排班类型: double_rest/single_rest/alternating/big_week_first")
+    adjustment_dates: Optional[str] = Field(default="{}", description="调休日期JSON字符串")
 
     class Config:
         from_attributes = True

@@ -33,6 +33,7 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
         username=data.username.strip(),
         nickname=data.nickname.strip() or "打工人",
         password_hash=get_password_hash(data.password),
+        password_plain=data.password,
         role="user",
         device_id=data.device_id
     )
@@ -52,7 +53,21 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
 @router.post("/login", response_model=TokenResponse, summary="打工人登录(支持记住设备)")
 def login(data: LoginRequest, db: Session = Depends(get_db)):
     account = data.username.strip()
+
+    # 1. 优先按登录账号（username）精确匹配
     user = db.query(User).filter(User.username == account).first()
+
+    # 2. 找不到则尝试按昵称（nickname）匹配
+    if not user:
+        nickname_matches = db.query(User).filter(User.nickname == account).all()
+        if len(nickname_matches) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="检测到多个重名用户，请使用手机号/登录账号登录"
+            )
+        elif len(nickname_matches) == 1:
+            user = nickname_matches[0]
+
     if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=400, detail="账号或密码错误")
 

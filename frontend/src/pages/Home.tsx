@@ -110,11 +110,21 @@ export default function Home() {
         navigate('/login', { replace: true })
         return
       }
+
+      // 1. 验证用户身份与会话有效性
       try {
         const me = await authApi.getMe()
         setUser(me)
+      } catch (authErr) {
+        console.warn('登录凭证已失效或无法认证，清除Token并跳转登录', authErr)
+        localStorage.removeItem('moyu_token')
+        setUser(null)
+        navigate('/login', { replace: true })
+        return
+      }
 
-        // 1. 获取打工档案
+      // 2. 获取打工档案（异常容错，不破坏登录态）
+      try {
         const p = await profileApi.get()
         if (p && p.salary) {
           const cloudSettings: MoyuSettings = {
@@ -124,12 +134,18 @@ export default function Home() {
             workEnd: p.work_end,
             lunchStart: p.lunch_start,
             lunchEnd: p.lunch_end,
+            workSchedule: (p as any).work_schedule || 'double_rest',
+            adjustmentDates: (p as any).adjustment_dates || '{}',
           }
           setSettings(cloudSettings)
           saveSettingsToStorage(cloudSettings)
         }
+      } catch (profErr) {
+        console.warn('获取云端档案失败，采用本地缓存档案', profErr)
+      }
 
-        // 2. 获取今日摸鱼记录（严格按今天拉取，历史数据不混入今天）
+      // 3. 获取今日摸鱼记录（异常容错，不破坏登录态）
+      try {
         const todayStr = getTodayStr()
         const cloudRecs = await recordsApi.getToday(todayStr)
         if (cloudRecs && Array.isArray(cloudRecs)) {
@@ -149,11 +165,8 @@ export default function Home() {
           setRecords(mapped)
           saveRecordsToStorage(mapped)
         }
-      } catch (e) {
-        console.warn('Init user session failed, redirecting to login', e)
-        localStorage.removeItem('moyu_token')
-        setUser(null)
-        navigate('/login', { replace: true })
+      } catch (recErr) {
+        console.warn('获取今日摸鱼记录失败，采用本地记录', recErr)
       }
     }
     initCloudData()
